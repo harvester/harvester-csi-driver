@@ -26,7 +26,8 @@ const (
 )
 
 type ControllerServer struct {
-	namespace string
+	namespace        string
+	hostStorageClass string
 
 	coreClient                ctlv1.Interface
 	virtSubresourceRestClient kubecli.KubevirtClient
@@ -35,11 +36,12 @@ type ControllerServer struct {
 	accessModes []*csi.VolumeCapability_AccessMode
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, namespace string) *ControllerServer {
+func NewControllerServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
 	return &ControllerServer{
+		namespace:                 namespace,
+		hostStorageClass:          hostStorageClass,
 		coreClient:                coreClient,
 		virtSubresourceRestClient: virtClient,
-		namespace:                 namespace,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -89,7 +91,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			Name:      req.Name,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			StorageClassName: pointer.StringPtr("longhorn"),
+			StorageClassName: pointer.StringPtr(cs.hostStorageClass),
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 			VolumeMode:       &volumeMode,
 		},

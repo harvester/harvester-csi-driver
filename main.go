@@ -34,6 +34,13 @@ func main() {
 			Usage:       "kubeconfig to access host Harvester cluster",
 			Destination: &cfg.KubeConfig,
 		},
+		cli.StringFlag{
+			Name:        "host-storage-class",
+			Value:       "longhorn",
+			EnvVar:      "HOST_STORAGE_CLASS",
+			Usage:       "storage class of volumes created in the host cluster",
+			Destination: &cfg.HostStorageClass,
+		},
 	}
 
 	app := cli.NewApp()
