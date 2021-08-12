@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	lhv1 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta1"
+	"github.com/longhorn/longhorn-manager/types"
 	"github.com/longhorn/longhorn-manager/util"
 	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
@@ -22,7 +24,6 @@ import (
 const (
 	timeoutAttachDetach = 120 * time.Second
 	tickAttachDetach    = 2 * time.Second
-	minimalVolumeSize   = 10 * 1024 * 1024
 )
 
 type ControllerServer struct {
@@ -30,17 +31,19 @@ type ControllerServer struct {
 	hostStorageClass string
 
 	coreClient                ctlv1.Interface
+	lhClient                  lhv1.Interface
 	virtSubresourceRestClient kubecli.KubevirtClient
 
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
+func NewControllerServer(coreClient ctlv1.Interface, lhClient lhv1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
 	return &ControllerServer{
 		namespace:                 namespace,
 		hostStorageClass:          hostStorageClass,
 		coreClient:                coreClient,
+		lhClient:                  lhClient,
 		virtSubresourceRestClient: virtClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
@@ -96,7 +99,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			VolumeMode:       &volumeMode,
 		},
 	}
-	volSizeBytes := int64(minimalVolumeSize)
+	volSizeBytes := int64(util.MinimalVolumeSize)
 	if req.GetCapacityRange() != nil {
 		volSizeBytes = req.GetCapacityRange().GetRequiredBytes()
 	}
@@ -297,6 +300,15 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 			req.CapacityRange.GetRequiredBytes(),
 			pvc.Spec.Resources.Requests.Storage().Value(),
 		)
+	}
+
+	existVol, err := cs.lhClient.Volume().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get volume %s: %v", req.GetVolumeId(), err)
+	}
+	// Support offline expansion only
+	if existVol.Status.State != types.VolumeStateDetached {
+		return nil, status.Errorf(codes.FailedPrecondition, "Invalid volume state %v for expansion", existVol.Status.State)
 	}
 
 	pvc.Spec.Resources = corev1.ResourceRequirements{
