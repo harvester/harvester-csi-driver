@@ -8,9 +8,27 @@ The Harvester Container Storage Interface (CSI) Driver provides a [CSI](https://
 `make`
 
 
-## Running
+## Deploying
 
-`./bin/harvester-csi-driver`
+### Prerequisites
+
+- The Kubernetes cluster is built on top of Harvester virtual machines.
+- The Harvester virtual machines running as guest Kubernetes nodes are in the same namespace.
+
+### Deploying with Harvester RKE2 node driver
+
+When spin up a kubernetes cluster using Rancher RKE2 node driver, the Harvester CSI driver will be deployed when harvester cloud provider is selected.
+
+### Deploying with Harvester RKE1 node driver
+
+1. Select the external cloud provider option.
+
+2. Generate addon configuration and add it in the rke config yaml.
+
+```
+# depend on kubectl to operate the Harvester
+./deploy/generate_addon.sh <serviceaccount name> <namespace>
+```
 
 ## License
 Copyright (c) 2020 [Rancher Labs, Inc.](http://rancher.com)
