@@ -50,7 +50,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
 	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, cfg.NodeID, namespace)
-	m.cs = NewControllerServer(coreClient.Core().V1(), virtSubresourceClient, namespace)
+	m.cs = NewControllerServer(coreClient.Core().V1(), virtSubresourceClient, namespace, cfg.HostStorageClass)
 
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()
