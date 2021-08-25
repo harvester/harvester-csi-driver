@@ -3,7 +3,6 @@ package csi
 import (
 	"github.com/harvester/harvester-csi-driver/pkg/config"
 	"github.com/harvester/harvester-csi-driver/pkg/version"
-	"github.com/harvester/harvester/pkg/generated/controllers/longhorn.io"
 	"github.com/rancher/wrangler/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler/pkg/kubeconfig"
 	"k8s.io/client-go/rest"
@@ -38,10 +37,6 @@ func (m *Manager) Run(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	lhClient, err := longhorn.NewFactoryFromConfig(restConfig)
-	if err != nil {
-		return err
-	}
 
 	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(rest.CopyConfig(restConfig))
 	if err != nil {
@@ -55,7 +50,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
 	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, cfg.NodeID, namespace)
-	m.cs = NewControllerServer(coreClient.Core().V1(), lhClient.Longhorn().V1beta1(), virtSubresourceClient, namespace, cfg.HostStorageClass)
+	m.cs = NewControllerServer(coreClient.Core().V1(), virtSubresourceClient, namespace, cfg.HostStorageClass)
 
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()

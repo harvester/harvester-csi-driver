@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	lhv1 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta1"
-	"github.com/longhorn/longhorn-manager/types"
 	"github.com/longhorn/longhorn-manager/util"
 	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
@@ -31,19 +29,17 @@ type ControllerServer struct {
 	hostStorageClass string
 
 	coreClient                ctlv1.Interface
-	lhClient                  lhv1.Interface
 	virtSubresourceRestClient kubecli.KubevirtClient
 
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, lhClient lhv1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
+func NewControllerServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
 	return &ControllerServer{
 		namespace:                 namespace,
 		hostStorageClass:          hostStorageClass,
 		coreClient:                coreClient,
-		lhClient:                  lhClient,
 		virtSubresourceRestClient: virtClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
@@ -302,13 +298,19 @@ func (cs *ControllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 		)
 	}
 
-	existVol, err := cs.lhClient.Volume().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
+	// Check if volume is in use by PVC references in pods' spec
+	podList, err := cs.coreClient.Pod().List(cs.namespace, metav1.ListOptions{})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to get volume %s: %v", req.GetVolumeId(), err)
+		return nil, status.Errorf(codes.Internal, "Failed to list pods: %v", err)
 	}
-	// Support offline expansion only
-	if existVol.Status.State != types.VolumeStateDetached {
-		return nil, status.Errorf(codes.FailedPrecondition, "Invalid volume state %v for expansion", existVol.Status.State)
+
+	for _, pod := range podList.Items {
+		for _, vol := range pod.Spec.Volumes {
+			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == req.GetVolumeId() {
+				// Volume is in use. Support offline expansion only
+				return nil, status.Errorf(codes.FailedPrecondition, "Volume %s is in use. Online volume expansion is not supported.", req.GetVolumeId())
+			}
+		}
 	}
 
 	pvc.Spec.Resources = corev1.ResourceRequirements{
