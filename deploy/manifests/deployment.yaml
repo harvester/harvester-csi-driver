@@ -208,6 +208,7 @@ spec:
             - --timeout=2m5s
             - --leader-election
             - --leader-election-namespace=$(POD_NAMESPACE)
+            - --default-fstype=ext4
           env:
             - name: ADDRESS
               value: /csi/csi.sock
