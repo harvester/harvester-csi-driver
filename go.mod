@@ -46,24 +46,37 @@ replace (
 require (
 	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8 // indirect
 	github.com/container-storage-interface/spec v1.3.0
+	github.com/go-kit/kit v0.10.0 // indirect
+	github.com/go-logfmt/logfmt v0.5.0 // indirect
 	github.com/go-openapi/spec v0.20.3 // indirect
-	github.com/harvester/harvester v0.2.0-rc4
+	github.com/google/go-cmp v0.5.5 // indirect
+	github.com/google/gofuzz v1.2.0 // indirect
+	github.com/googleapis/gnostic v0.5.4 // indirect
+	github.com/imdario/mergo v0.3.11 // indirect
+	github.com/k8snetworkplumbingwg/network-attachment-definition-client v0.0.0-20200331171230-d50e42f2b669 // indirect
 	github.com/kubernetes-csi/csi-lib-utils v0.7.0
 	github.com/longhorn/longhorn-manager v1.1.2
+	github.com/onsi/ginkgo v1.16.1 // indirect
+	github.com/onsi/gomega v1.11.0 // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/rancher/lasso v0.0.0-20210616224652-fc3ebd901c08 // indirect
 	github.com/rancher/wrangler v0.8.1-0.20210618171953-ab479ee75244
 	github.com/sirupsen/logrus v1.8.1
 	github.com/spf13/afero v1.6.0 // indirect
 	github.com/urfave/cli v1.22.2
+	golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a // indirect
 	golang.org/x/net v0.0.0-20210315170653-34ac3e1c2000
+	golang.org/x/oauth2 v0.0.0-20201208152858-08078c50e5b5 // indirect
 	golang.org/x/sys v0.0.0-20210315160823-c6e025ad8005
+	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba // indirect
+	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20210315173758-2651cd453018 // indirect
 	google.golang.org/grpc v1.34.0
 	k8s.io/api v0.21.2
 	k8s.io/apiextensions-apiserver v0.21.2 // indirect
 	k8s.io/apimachinery v0.21.2
 	k8s.io/client-go v12.0.0+incompatible
+	k8s.io/klog/v2 v2.8.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20210305001622-591a79e4bda7 // indirect
 	k8s.io/kubernetes v1.21.2
 	k8s.io/mount-utils v0.0.0
