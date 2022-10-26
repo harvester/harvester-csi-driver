@@ -1,6 +1,7 @@
-FROM ubuntu:20.04
+FROM registry.suse.com/bci/bci-base:15.4
 
-RUN apt-get update && apt-get install -y curl vim nfs-common iproute2 dnsutils iputils-ping zip xfsprogs
+RUN zypper update --no-confirm && \
+    zypper install --no-confirm curl iproute2 iputils nfs-client vim xfsprogs zip
 
 COPY bin/harvester-csi-driver /usr/bin/
 
