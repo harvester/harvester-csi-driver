@@ -1,6 +1,6 @@
 module github.com/harvester/harvester-csi-driver
 
-go 1.16
+go 1.18
 
 replace (
 	github.com/docker/distribution => github.com/docker/distribution v0.0.0-20191216044856-a8371794149d
@@ -44,42 +44,90 @@ replace (
 )
 
 require (
-	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8 // indirect
 	github.com/container-storage-interface/spec v1.3.0
-	github.com/go-kit/kit v0.10.0 // indirect
-	github.com/go-logfmt/logfmt v0.5.0 // indirect
-	github.com/go-openapi/spec v0.20.3 // indirect
-	github.com/google/go-cmp v0.5.5 // indirect
-	github.com/google/gofuzz v1.2.0 // indirect
-	github.com/googleapis/gnostic v0.5.4 // indirect
-	github.com/imdario/mergo v0.3.11 // indirect
-	github.com/k8snetworkplumbingwg/network-attachment-definition-client v0.0.0-20200331171230-d50e42f2b669 // indirect
 	github.com/kubernetes-csi/csi-lib-utils v0.7.0
 	github.com/longhorn/longhorn-manager v1.1.2
-	github.com/onsi/ginkgo v1.16.1 // indirect
-	github.com/onsi/gomega v1.11.0 // indirect
 	github.com/pkg/errors v0.9.1
-	github.com/rancher/lasso v0.0.0-20210616224652-fc3ebd901c08 // indirect
 	github.com/rancher/wrangler v0.8.1-0.20210618171953-ab479ee75244
 	github.com/sirupsen/logrus v1.8.1
-	github.com/spf13/afero v1.6.0 // indirect
 	github.com/urfave/cli v1.22.2
-	golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a // indirect
 	golang.org/x/net v0.0.0-20210315170653-34ac3e1c2000
-	golang.org/x/oauth2 v0.0.0-20201208152858-08078c50e5b5 // indirect
 	golang.org/x/sys v0.0.0-20210315160823-c6e025ad8005
-	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba // indirect
-	google.golang.org/appengine v1.6.7 // indirect
-	google.golang.org/genproto v0.0.0-20210315173758-2651cd453018 // indirect
 	google.golang.org/grpc v1.34.0
 	k8s.io/api v0.21.2
-	k8s.io/apiextensions-apiserver v0.21.2 // indirect
 	k8s.io/apimachinery v0.21.2
 	k8s.io/client-go v12.0.0+incompatible
-	k8s.io/klog/v2 v2.8.0 // indirect
-	k8s.io/kube-openapi v0.0.0-20210305001622-591a79e4bda7 // indirect
 	k8s.io/kubernetes v1.21.2
 	k8s.io/mount-utils v0.0.0
 	k8s.io/utils v0.0.0-20210305010621-2afb4311ab10
 	kubevirt.io/client-go v0.44.0
+)
+
+require (
+	github.com/PuerkitoBio/purell v1.1.1 // indirect
+	github.com/PuerkitoBio/urlesc v0.0.0-20170810143723-de5bf2ad4578 // indirect
+	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8 // indirect
+	github.com/coreos/prometheus-operator v0.35.0 // indirect
+	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/emicklei/go-restful v2.10.0+incompatible // indirect
+	github.com/evanphx/json-patch v4.9.0+incompatible // indirect
+	github.com/go-kit/kit v0.10.0 // indirect
+	github.com/go-logfmt/logfmt v0.5.0 // indirect
+	github.com/go-logr/logr v0.4.0 // indirect
+	github.com/go-openapi/jsonpointer v0.19.5 // indirect
+	github.com/go-openapi/jsonreference v0.19.5 // indirect
+	github.com/go-openapi/spec v0.20.3 // indirect
+	github.com/go-openapi/swag v0.19.14 // indirect
+	github.com/go-stack/stack v1.8.0 // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b // indirect
+	github.com/golang/mock v1.4.4 // indirect
+	github.com/golang/protobuf v1.4.3 // indirect
+	github.com/google/go-cmp v0.5.5 // indirect
+	github.com/google/gofuzz v1.2.0 // indirect
+	github.com/google/uuid v1.1.2 // indirect
+	github.com/googleapis/gnostic v0.5.4 // indirect
+	github.com/gorilla/handlers v1.4.2 // indirect
+	github.com/gorilla/websocket v1.4.2 // indirect
+	github.com/hashicorp/golang-lru v0.5.4 // indirect
+	github.com/imdario/mergo v0.3.11 // indirect
+	github.com/josharian/intern v1.0.0 // indirect
+	github.com/json-iterator/go v1.1.10 // indirect
+	github.com/k8snetworkplumbingwg/network-attachment-definition-client v0.0.0-20200331171230-d50e42f2b669 // indirect
+	github.com/kubernetes-csi/external-snapshotter/v2 v2.1.1 // indirect
+	github.com/longhorn/go-iscsi-helper v0.0.0-20201111045018-ee87992ec536 // indirect
+	github.com/mailru/easyjson v0.7.6 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.1 // indirect
+	github.com/onsi/ginkgo v1.16.1 // indirect
+	github.com/onsi/gomega v1.11.0 // indirect
+	github.com/openshift/api v0.0.0 // indirect
+	github.com/openshift/client-go v0.0.0 // indirect
+	github.com/openshift/custom-resource-status v0.0.0-20200602122900-c002fd1547ca // indirect
+	github.com/pborman/uuid v1.2.0 // indirect
+	github.com/rancher/lasso v0.0.0-20210616224652-fc3ebd901c08 // indirect
+	github.com/russross/blackfriday/v2 v2.0.1 // indirect
+	github.com/satori/go.uuid v1.2.0 // indirect
+	github.com/shurcooL/sanitized_anchor_name v1.0.0 // indirect
+	github.com/spf13/afero v1.6.0 // indirect
+	github.com/spf13/pflag v1.0.5 // indirect
+	golang.org/x/crypto v0.0.0-20210513164829-c07d793c2f9a // indirect
+	golang.org/x/oauth2 v0.0.0-20201208152858-08078c50e5b5 // indirect
+	golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1 // indirect
+	golang.org/x/text v0.3.5 // indirect
+	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba // indirect
+	google.golang.org/appengine v1.6.7 // indirect
+	google.golang.org/genproto v0.0.0-20210315173758-2651cd453018 // indirect
+	google.golang.org/protobuf v1.25.0 // indirect
+	gopkg.in/inf.v0 v0.9.1 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
+	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	k8s.io/apiextensions-apiserver v0.21.2 // indirect
+	k8s.io/klog/v2 v2.8.0 // indirect
+	k8s.io/kube-openapi v0.0.0-20210305001622-591a79e4bda7 // indirect
+	kubevirt.io/containerized-data-importer v1.36.0 // indirect
+	kubevirt.io/controller-lifecycle-operator-sdk v0.2.0 // indirect
+	sigs.k8s.io/structured-merge-diff/v4 v4.0.2 // indirect
+	sigs.k8s.io/yaml v1.2.0 // indirect
 )
