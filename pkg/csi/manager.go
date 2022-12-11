@@ -3,14 +3,15 @@ package csi
 import (
 	"os"
 
-	"github.com/harvester/harvester-csi-driver/pkg/config"
-	"github.com/harvester/harvester-csi-driver/pkg/version"
-
 	"github.com/rancher/wrangler/pkg/generated/controllers/core"
+	"github.com/rancher/wrangler/pkg/generated/controllers/storage"
 	"github.com/rancher/wrangler/pkg/kubeconfig"
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/rest"
 	"kubevirt.io/client-go/kubecli"
+
+	"github.com/harvester/harvester-csi-driver/pkg/config"
+	"github.com/harvester/harvester-csi-driver/pkg/version"
 )
 
 const (
@@ -54,6 +55,11 @@ func (m *Manager) Run(cfg *config.Config) error {
 		return err
 	}
 
+	storageClient, err := storage.NewFactoryFromConfig(restConfig)
+	if err != nil {
+		return err
+	}
+
 	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(rest.CopyConfig(restConfig))
 	if err != nil {
 		return err
@@ -66,7 +72,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
 	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, cfg.NodeID, namespace)
-	m.cs = NewControllerServer(coreClient.Core().V1(), virtSubresourceClient, namespace, cfg.HostStorageClass)
+	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtSubresourceClient, namespace, cfg.HostStorageClass)
 
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()

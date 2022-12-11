@@ -4,11 +4,12 @@ import (
 	_ "net/http/pprof"
 	"os"
 
+	"github.com/sirupsen/logrus"
+	"github.com/urfave/cli"
+
 	"github.com/harvester/harvester-csi-driver/pkg/config"
 	"github.com/harvester/harvester-csi-driver/pkg/csi"
 	"github.com/harvester/harvester-csi-driver/pkg/version"
-	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
 )
 
 var (
@@ -36,7 +37,7 @@ func main() {
 		},
 		cli.StringFlag{
 			Name:        "host-storage-class",
-			Value:       "longhorn",
+			Value:       "",
 			EnvVar:      "HOST_STORAGE_CLASS",
 			Usage:       "storage class of volumes created in the host cluster",
 			Destination: &cfg.HostStorageClass,

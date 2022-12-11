@@ -7,6 +7,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/longhorn/longhorn-manager/util"
 	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
+	ctlstoragev1 "github.com/rancher/wrangler/pkg/generated/controllers/storage/v1"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -22,6 +23,7 @@ import (
 const (
 	timeoutAttachDetach = 120 * time.Second
 	tickAttachDetach    = 2 * time.Second
+	paramHostSC         = "hostStorageClass"
 )
 
 type ControllerServer struct {
@@ -29,17 +31,19 @@ type ControllerServer struct {
 	hostStorageClass string
 
 	coreClient                ctlv1.Interface
+	storageClient             ctlstoragev1.Interface
 	virtSubresourceRestClient kubecli.KubevirtClient
 
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
+func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
 	return &ControllerServer{
 		namespace:                 namespace,
 		hostStorageClass:          hostStorageClass,
 		coreClient:                coreClient,
+		storageClient:             storageClient,
 		virtSubresourceRestClient: virtClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
@@ -55,8 +59,34 @@ func NewControllerServer(coreClient ctlv1.Interface, virtClient kubecli.Kubevirt
 	}
 }
 
+func (cs *ControllerServer) validStorageClass(storageClassName string) error {
+	logrus.Infof("Prepare to check the host StorageClass: %s", storageClassName)
+	sc, err := cs.storageClient.StorageClass().Get(storageClassName, metav1.GetOptions{})
+	if err != nil {
+		errReason := errors.ReasonForError(err)
+		switch errReason {
+		case metav1.StatusReasonForbidden:
+			/*
+			 * In older version, the guest cluster do not have permission to get storage class
+			 * from the host harvester cluster. We just skip checking on this situation
+			 */
+			logrus.Warnf("No permission, skip checking. err: %+v", err)
+			return nil
+		case metav1.StatusReasonNotFound:
+			logrus.Errorf("The StorageClass %s does not exist.", storageClassName)
+			return status.Error(codes.NotFound, err.Error())
+		default:
+			return status.Error(codes.Internal, err.Error())
+		}
+	}
+	logrus.Debugf("Get the `%s` StorageClass: %+v", storageClassName, sc)
+
+	return nil
+}
+
 func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	logrus.Infof("ControllerServer create volume req: %v", req)
+	targetSC := cs.hostStorageClass
 
 	if err := cs.validateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
 		logrus.Errorf("CreateVolume: invalid create volume req: %v", req)
@@ -71,7 +101,10 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	if err := cs.validateVolumeCapabilities(volumeCaps); err != nil {
 		return nil, err
 	}
+
+	// Parameter handling
 	volumeParameters := req.GetParameters()
+	logrus.Debugf("Getting volumeParameters: %+v", volumeParameters)
 	if volumeParameters == nil {
 		volumeParameters = map[string]string{}
 	}
@@ -89,11 +122,31 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			Name:      req.Name,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			StorageClassName: pointer.StringPtr(cs.hostStorageClass),
-			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
-			VolumeMode:       &volumeMode,
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			VolumeMode:  &volumeMode,
 		},
 	}
+
+	/*
+	 * Let's handle SC
+	 * SC define > controller define
+	 *
+	 * Checking mechanism:
+	 * 1. If guest cluster is not be allowed to list host cluster StorageClass, just continue.
+	 * 2. If guest cluster can list host cluster StorageClass, check it.
+	 */
+	if val, exists := volumeParameters[paramHostSC]; exists {
+		//If StorageClass has `hostStorageClass` parameter, check whether it is valid or not.
+		if err := cs.validStorageClass(val); err != nil {
+			return nil, err
+		}
+		targetSC = val
+	}
+	if targetSC != "" {
+		pvc.Spec.StorageClassName = pointer.StringPtr(targetSC)
+		logrus.Infof("Set up the target StorageClass to : %s", *pvc.Spec.StorageClassName)
+	}
+	logrus.Debugf("The PVC content wanted is: %+v", pvc)
 	volSizeBytes := int64(util.MinimalVolumeSize)
 	if req.GetCapacityRange() != nil {
 		volSizeBytes = req.GetCapacityRange().GetRequiredBytes()
