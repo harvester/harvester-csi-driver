@@ -18,7 +18,7 @@ import (
 	"k8s.io/kubernetes/pkg/volume/util/hostutil"
 	"k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
-	v1 "kubevirt.io/client-go/api/v1"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 )
 
@@ -65,7 +65,7 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	}
 	var hotPlugDiskReady bool
 	for _, volStatus := range vmi.Status.VolumeStatus {
-		if volStatus.Name == req.VolumeId && volStatus.HotplugVolume != nil && volStatus.Phase == v1.VolumeReady && volStatus.Target != "" {
+		if volStatus.Name == req.VolumeId && volStatus.HotplugVolume != nil && volStatus.Phase == kubevirtv1.VolumeReady && volStatus.Target != "" {
 			hotPlugDiskReady = true
 			break
 		}
