@@ -16,7 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
-	kv1 "kubevirt.io/client-go/api/v1"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 )
 
@@ -253,19 +253,21 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 			req.GetVolumeId(), pvc.Status.Phase)
 	}
 
-	opts := &kv1.AddVolumeOptions{
+	opts := &kubevirtv1.AddVolumeOptions{
 		Name: req.VolumeId,
-		Disk: &kv1.Disk{
-			DiskDevice: kv1.DiskDevice{
-				Disk: &kv1.DiskTarget{
+		Disk: &kubevirtv1.Disk{
+			DiskDevice: kubevirtv1.DiskDevice{
+				Disk: &kubevirtv1.DiskTarget{
 					// KubeVirt only supports SCSI for hot-plug volumes.
 					Bus: "scsi",
 				},
 			},
 		},
-		VolumeSource: &kv1.HotplugVolumeSource{
-			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-				ClaimName: req.VolumeId,
+		VolumeSource: &kubevirtv1.HotplugVolumeSource{
+			PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+				PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: req.VolumeId,
+				},
 			},
 		},
 	}
@@ -303,7 +305,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 			req.GetVolumeId(), pvc.Status.Phase)
 	}
 
-	opts := &kv1.RemoveVolumeOptions{
+	opts := &kubevirtv1.RemoveVolumeOptions{
 		Name: req.VolumeId,
 	}
 	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).RemoveVolume(req.GetNodeId(), opts); err != nil {
