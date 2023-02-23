@@ -6,9 +6,8 @@ ENV ARCH $DAPPER_HOST_ARCH
 RUN zypper -n rm container-suseconnect && \
     zypper -n install git curl docker gzip tar wget awk
 
-RUN go install golang.org/x/tools/cmd/goimports@v0.2.0
 RUN if [ "${ARCH}" == "amd64" ]; then \
-        curl -sL https://install.goreleaser.com/github.com/golangci/golangci-lint.sh | sh -s v1.40.1; \
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s v1.49.0; \
     fi
 
 ENV DAPPER_ENV REPO TAG DRONE_TAG CROSS HTTP_PROXY HTTPS_PROXY http_proxy https_proxy

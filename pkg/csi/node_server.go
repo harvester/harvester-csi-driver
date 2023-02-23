@@ -304,7 +304,7 @@ func (ns *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 }
 
 func getNodeServiceCapabilities(cs []csi.NodeServiceCapability_RPC_Type) []*csi.NodeServiceCapability {
-	var nscs []*csi.NodeServiceCapability
+	var nscs = make([]*csi.NodeServiceCapability, len(cs))
 
 	for _, cap := range cs {
 		logrus.Infof("Enabling node service capability: %v", cap.String())
