@@ -431,7 +431,7 @@ func (cs *ControllerServer) validateVolumeCapabilities(volumeCaps []*csi.VolumeC
 }
 
 func getControllerServiceCapabilities(cl []csi.ControllerServiceCapability_RPC_Type) []*csi.ControllerServiceCapability {
-	var cscs []*csi.ControllerServiceCapability
+	var cscs = make([]*csi.ControllerServiceCapability, len(cl))
 
 	for _, cap := range cl {
 		logrus.Infof("Enabling controller service capability: %v", cap.String())
@@ -448,7 +448,7 @@ func getControllerServiceCapabilities(cl []csi.ControllerServiceCapability_RPC_T
 }
 
 func getVolumeCapabilityAccessModes(vc []csi.VolumeCapability_AccessMode_Mode) []*csi.VolumeCapability_AccessMode {
-	var vca []*csi.VolumeCapability_AccessMode
+	var vca = make([]*csi.VolumeCapability_AccessMode, len(vc))
 	for _, c := range vc {
 		logrus.Infof("Enabling volume access mode: %v", c.String())
 		vca = append(vca, &csi.VolumeCapability_AccessMode{Mode: c})
