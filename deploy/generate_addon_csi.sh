@@ -10,8 +10,8 @@ if [[ -z "$1" ]] || [[ -z "$2" ]]; then
 fi
 
 SERVICE_ACCOUNT_NAME=$1
-ROLE_BINDING_NAME=$1
-NAMESPACE="$2"
+NAMESPACE=$2
+ROLE_BINDING_NAME=$NAMESPACE-$SERVICE_ACCOUNT_NAME
 CLUSTER_ROLE_NAME="harvesterhci.io:cloudprovider"
 KUBECFG_FILE_NAME="./tmp/kube/k8s-${SERVICE_ACCOUNT_NAME}-${NAMESPACE}-conf"
 TARGET_FOLDER="./tmp/kube"
