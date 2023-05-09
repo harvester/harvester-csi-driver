@@ -2,12 +2,31 @@
 set -e
 set -o pipefail
 
+echo
+echo "NOTE: if your are using RKE2/K3S, please follow this usage: $0 <service_account_name> <namespace> rke2/k3s"
+echo
+
 # Add user to k8s using service account, no RBAC (must create RBAC after this script)
 if [[ -z "$1" ]] || [[ -z "$2" ]]; then
   echo "description: The script is used to add a serviceAccount in the Harvester cluster for the Harvester cloud provider and generate the RKE addon configuration. It depends on kubectl."
   echo "usage: $0 <service_account_name> <namespace>"
   exit 1
 fi
+
+SCRIPT_TARGET="RKE1"
+if [[ -n "$3" ]]; then
+  SCRIPT_TARGET=$3
+fi
+
+
+case $SCRIPT_TARGET in
+  RKE1 | rke1 | RKE2 | rke2 | K3S | k3s)
+;;
+  *)
+  echo "Target $SCRIPT_TARGET is not supported, please use RKE1, RKE2 or K3S"
+  exit 1
+;;
+esac
 
 SERVICE_ACCOUNT_NAME=$1
 NAMESPACE=$2
@@ -143,6 +162,25 @@ $kubeconfig
   rm -rf ${TARGET_FOLDER}
 }
 
+generate_cloud_config() {
+  echo "########## cloud-config ############"
+  cat ${KUBECFG_FILE_NAME}
+  echo
+  echo "########## cloud-init user data ############"
+  if [[ $OSTYPE == 'darwin'* ]]; then
+          KUBECONFIG_B64=$(base64 -b 0 < "${KUBECFG_FILE_NAME}")
+  else
+          KUBECONFIG_B64=$(base64 -w 0 < "${KUBECFG_FILE_NAME}")
+  fi
+  echo "write_files:
+  - encoding: b64
+    content: ${KUBECONFIG_B64}
+    owner: root:root
+    path: /etc/kubernetes/cloud-config
+    permissions: '0644'"
+  rm -r ${TARGET_FOLDER}
+}
+
 create_target_folder
 create_service_account
 create_rolebinding
@@ -150,4 +188,12 @@ get_secret_name_from_service_account
 extract_ca_crt_from_secret
 get_user_token_from_secret
 set_kube_config_values
-assemble_addon_config
+
+case $SCRIPT_TARGET in
+  RKE1 | rke1)
+  assemble_addon_config
+;;
+  RKE2 | rke2 | K3S | k3s)
+  generate_cloud_config
+;;
+esac
