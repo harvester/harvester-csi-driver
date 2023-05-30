@@ -176,7 +176,7 @@ generate_cloud_config() {
   - encoding: b64
     content: ${KUBECONFIG_B64}
     owner: root:root
-    path: /etc/kubernetes/cloud-config
+    path: /var/lib/rancher/rke2/etc/config-files/cloud-provider-config
     permissions: '0644'"
   rm -r ${TARGET_FOLDER}
 }
