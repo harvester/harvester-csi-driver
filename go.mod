@@ -1,6 +1,6 @@
 module github.com/harvester/harvester-csi-driver
 
-go 1.18
+go 1.20
 
 replace (
 	github.com/docker/distribution => github.com/docker/distribution v0.0.0-20191216044856-a8371794149d
