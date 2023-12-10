@@ -54,7 +54,7 @@ create_rolebinding() {
 
 get_secret_name_from_service_account() {
   read -r SERVER_MAJOR_VERSION SERVER_MINOR_VERSION < <(kubectl version -ojson | jq -r '[.serverVersion | .major, .minor] | join(" ")')
-  if [ "${SERVER_MAJOR_VERSION}" -ge 1 ] && [ "${SERVER_MINOR_VERSION}" -ge 24 ]; then
+  if [ ${SERVER_MAJOR_VERSION//[$'\t\r\n ']} -ge 1 ] && [ ${SERVER_MINOR_VERSION//[$'\t\r\n ']} -ge 24 ]; then
     SECRET_NAME="${SERVICE_ACCOUNT_NAME}-token"
     echo -e "\\nGetting uid of service account ${SERVICE_ACCOUNT_NAME} on ${NAMESPACE}"
     SERVICE_ACCOUNT_UID=$(kubectl get sa "${SERVICE_ACCOUNT_NAME}" --namespace "${NAMESPACE}" -o jsonpath="{.metadata.uid}")
