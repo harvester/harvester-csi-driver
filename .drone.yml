@@ -117,9 +117,6 @@ volumes:
 kind: pipeline
 name: manifest
 
-env:
-  IMAGE_NAME: "rancher/harvester-csi-driver"
-
 steps:
   - name: push-manifest-head
     image: plugins/manifest
@@ -128,8 +125,8 @@ steps:
         from_secret: docker_username
       password:
         from_secret: docker_password
-      target: "${IMAGE_NAME}:${DRONE_BRANCH}-head"
-      template: "${IMAGE_NAME}:${DRONE_BRANCH}-head-OS-ARCH"
+      target: "rancher/harvester-csi-driver:${DRONE_BRANCH}-head"
+      template: "rancher/harvester-csi-driver:${DRONE_BRANCH}-head-OS-ARCH"
       ignore_missing: true
       platforms:
         - linux/amd64
@@ -149,8 +146,8 @@ steps:
         from_secret: docker_username
       password:
         from_secret: docker_password
-      target: "${IMAGE_NAME}:${DRONE_TAG}"
-      template: "${IMAGE_NAME}:${DRONE_TAG}-OS-ARCH"
+      target: "rancher/harvester-csi-driver:${DRONE_TAG}"
+      template: "rancher/harvester-csi-driver:${DRONE_TAG}-OS-ARCH"
       ignore_missing: true
       platforms:
         - linux/amd64
