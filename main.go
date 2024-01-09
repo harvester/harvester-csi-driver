@@ -60,7 +60,7 @@ func main() {
 	}
 }
 
-func runCSI(c *cli.Context) error {
+func runCSI(*cli.Context) error {
 	manager := csi.GetCSIManager()
 	return manager.Run(&cfg)
 }
