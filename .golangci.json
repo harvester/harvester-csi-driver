@@ -9,11 +9,13 @@
 			"prealloc"
 		]
 	},
-	"run": {
-		"skip-files": [
+	"issues": {
+		"exclude-files": [
 			"/zz_generated_"
-		],
-		"deadline": "5m"
+		]
+	},
+	"run": {
+		"timeout": "5m"
 	},
 	"linters-settings": {
 		"goimports": {
