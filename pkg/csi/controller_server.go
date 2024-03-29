@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/longhorn/longhorn-manager/util"
 	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	ctlstoragev1 "github.com/rancher/wrangler/pkg/generated/controllers/storage/v1"
 	"github.com/sirupsen/logrus"
@@ -18,6 +17,8 @@ import (
 	"k8s.io/utils/pointer"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
+
+	"github.com/harvester/harvester-csi-driver/pkg/utils"
 )
 
 const (
@@ -147,16 +148,16 @@ func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolum
 		logrus.Infof("Set up the target StorageClass to : %s", *pvc.Spec.StorageClassName)
 	}
 	logrus.Debugf("The PVC content wanted is: %+v", pvc)
-	volSizeBytes := int64(util.MinimalVolumeSize)
+	volSizeBytes := int64(utils.MinimalVolumeSize)
 	if req.GetCapacityRange() != nil {
 		volSizeBytes = req.GetCapacityRange().GetRequiredBytes()
 	}
-	if volSizeBytes < util.MinimalVolumeSize {
-		logrus.Warnf("Request volume %v size %v is smaller than minimal size %v, set it to minimal size.", req.Name, volSizeBytes, util.MinimalVolumeSize)
-		volSizeBytes = util.MinimalVolumeSize
+	if volSizeBytes < utils.MinimalVolumeSize {
+		logrus.Warnf("Request volume %v size %v is smaller than minimal size %v, set it to minimal size.", req.Name, volSizeBytes, utils.MinimalVolumeSize)
+		volSizeBytes = utils.MinimalVolumeSize
 	}
 	// Round up to multiple of 2 * 1024 * 1024
-	volSizeBytes = util.RoundUpSize(volSizeBytes)
+	volSizeBytes = utils.RoundUpSize(volSizeBytes)
 	pvc.Spec.Resources = corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceStorage: *resource.NewQuantity(volSizeBytes, resource.BinarySI),
