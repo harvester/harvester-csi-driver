@@ -11,8 +11,7 @@ if [ "$(uname)" = "Linux" ]; then
 fi
 LINKFLAGS="-X github.com/harvester/harvester-csi-driver/pkg/version.Version=$VERSION"
 LINKFLAGS="-X github.com/harvester/harvester-csi-driver/pkg/version.GitCommit=$COMMIT $LINKFLAGS"
-CGO_ENABLED=0 go build -ldflags "$LINKFLAGS $OTHER_LINKFLAGS" -o bin/harvester-csi-driver
-if [ "$CROSS" = "true" ] && [ "$ARCH" = "amd64" ]; then
-    GOOS=darwin go build -ldflags "$LINKFLAGS" -o bin/harvester-csi-driver-darwin
-    GOOS=windows go build -ldflags "$LINKFLAGS" -o bin/harvester-csi-driver-windows
-fi
+
+for arch in "amd64" "arm64"; do
+    GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "$LINKFLAGS $OTHER_LINKFLAGS" -o bin/harvester-csi-driver-"$arch"
+done
