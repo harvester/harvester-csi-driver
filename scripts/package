@@ -14,5 +14,5 @@ if [ -e ${DOCKERFILE}.${ARCH} ]; then
     DOCKERFILE=${DOCKERFILE}.${ARCH}
 fi
 
-docker build -f ${DOCKERFILE} -t ${IMAGE} .
+buildx build --load -f ${DOCKERFILE} -t ${IMAGE} .
 echo Built ${IMAGE}
