@@ -2,9 +2,13 @@ package csi
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	lhv1beta2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
+	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	ctlstoragev1 "github.com/rancher/wrangler/pkg/generated/controllers/storage/v1"
 	"github.com/sirupsen/logrus"
@@ -14,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/pointer"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
@@ -22,30 +27,33 @@ import (
 )
 
 const (
-	timeoutAttachDetach = 120 * time.Second
+	timeoutAttachDetach = 60 * time.Second
 	tickAttachDetach    = 2 * time.Second
 	paramHostSC         = "hostStorageClass"
+	LHVolumeNS          = "longhorn-system"
 )
 
 type ControllerServer struct {
 	namespace        string
 	hostStorageClass string
 
-	coreClient                ctlv1.Interface
-	storageClient             ctlstoragev1.Interface
-	virtSubresourceRestClient kubecli.KubevirtClient
+	coreClient    ctlv1.Interface
+	storageClient ctlstoragev1.Interface
+	virtClient    kubecli.KubevirtClient
+	lhClient      *lhclientset.Clientset
 
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
+func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, namespace string, hostStorageClass string) *ControllerServer {
 	return &ControllerServer{
-		namespace:                 namespace,
-		hostStorageClass:          hostStorageClass,
-		coreClient:                coreClient,
-		storageClient:             storageClient,
-		virtSubresourceRestClient: virtClient,
+		namespace:        namespace,
+		hostStorageClass: hostStorageClass,
+		coreClient:       coreClient,
+		storageClient:    storageClient,
+		virtClient:       virtClient,
+		lhClient:         lhClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -253,6 +261,15 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		return nil, status.Errorf(codes.Aborted, "The PVC %s in phase %v is not ready to be attached",
 			req.GetVolumeId(), pvc.Status.Phase)
 	}
+	lhVolumeName := pvc.Spec.VolumeName
+
+	// we should wait for the volume to be detached from the previous node
+	// Wait until engine confirmed that rebuild started
+	if err := wait.PollUntilContextTimeout(context.Background(), tickAttachDetach, timeoutAttachDetach, true, func(context.Context) (bool, error) {
+		return waitForVolSettled(cs.lhClient, lhVolumeName, req.GetNodeId())
+	}); err != nil {
+		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to wait the volume %s status to settled", req.GetVolumeId())
+	}
 
 	opts := &kubevirtv1.AddVolumeOptions{
 		Name: req.VolumeId,
@@ -273,7 +290,7 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		},
 	}
 
-	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).AddVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
+	if err := cs.virtClient.VirtualMachine(cs.namespace).AddVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to add volume to node %v: %v", req.GetNodeId(), err)
 	}
 
@@ -306,10 +323,31 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 			req.GetVolumeId(), pvc.Status.Phase)
 	}
 
+	volumeHotplugged := false
+	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), req.GetNodeId(), &metav1.GetOptions{})
+	if err != nil {
+		// if the VMI already deleted, we can return success directly
+		if errors.IsNotFound(err) {
+			return &csi.ControllerUnpublishVolumeResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "Failed to get VMI %s: %v", req.GetNodeId(), err)
+	}
+	for _, volStatus := range vmi.Status.VolumeStatus {
+		if volStatus.Name == req.VolumeId && volStatus.HotplugVolume != nil {
+			volumeHotplugged = true
+			break
+		}
+	}
+
+	if !volumeHotplugged {
+		logrus.Infof("Volume %s is not attached to node %s. No need RemoveVolume operation!", req.GetVolumeId(), req.GetNodeId())
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
 	opts := &kubevirtv1.RemoveVolumeOptions{
 		Name: req.VolumeId,
 	}
-	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
+	if err := cs.virtClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to remove volume %v from node %s: %v", req.VolumeId, req.GetNodeId(), err)
 	}
 
@@ -457,6 +495,35 @@ func getVolumeCapabilityAccessModes(vc []csi.VolumeCapability_AccessMode_Mode) [
 	return vca
 }
 
+func waitForVolSettled(lhClient *lhclientset.Clientset, lhVolName, nodeID string) (bool, error) {
+	volume, err := lhClient.LonghornV1beta2().Volumes(LHVolumeNS).Get(context.TODO(), lhVolName, metav1.GetOptions{})
+	if err != nil {
+		logrus.Warnf("waitForVolumeSettled: error while waiting for volume %s to be settled. Err: %v", lhVolName, err)
+		return false, err
+	}
+	// check attached correctly
+	if volAttachedCorrectly(volume, nodeID) {
+		return true, nil
+	}
+	if volume.Status.State == lhv1beta2.VolumeStateDetached {
+		return true, nil
+	}
+	return false, fmt.Errorf("volume Status (not correctly): %s, CurrentNodeID: %s, ExpectedNodeID: %s", volume.Status.State, volume.Status.CurrentNodeID, nodeID)
+}
+
+func volAttachedCorrectly(volume *lhv1beta2.Volume, nodeID string) bool {
+	virtWorkloads := getVirtLauncherWorkloadsFromLHVolume(volume)
+	logrus.Debugf("Volume %s state: %s, currentNodeID: %s, nodeID: %v, virtWorkloads: %v", volume.Name, volume.Status.State, volume.Status.CurrentNodeID, nodeID, virtWorkloads)
+	if volume.Status.State == lhv1beta2.VolumeStateAttached {
+		for _, workload := range virtWorkloads {
+			if strings.Contains(workload, nodeID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (cs *ControllerServer) waitForPVCState(name string, stateDescription string,
 	predicate func(pvc *corev1.PersistentVolumeClaim) bool) bool {
 	timer := time.NewTimer(timeoutAttachDetach)
@@ -484,4 +551,14 @@ func (cs *ControllerServer) waitForPVCState(name string, stateDescription string
 			}
 		}
 	}
+}
+
+func getVirtLauncherWorkloadsFromLHVolume(volume *lhv1beta2.Volume) []string {
+	virtWorkloads := []string{}
+	for _, workload := range volume.Status.KubernetesStatus.WorkloadsStatus {
+		if strings.HasPrefix(workload.WorkloadName, "virt-launcher-") {
+			virtWorkloads = append(virtWorkloads, workload.WorkloadName)
+		}
+	}
+	return virtWorkloads
 }
