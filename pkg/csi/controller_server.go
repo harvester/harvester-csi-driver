@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	lhv1beta2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
+	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	ctlstoragev1 "github.com/rancher/wrangler/pkg/generated/controllers/storage/v1"
 	"github.com/sirupsen/logrus"
@@ -25,27 +27,30 @@ const (
 	timeoutAttachDetach = 120 * time.Second
 	tickAttachDetach    = 2 * time.Second
 	paramHostSC         = "hostStorageClass"
+	LHVolumeNS          = "longhorn-system"
 )
 
 type ControllerServer struct {
 	namespace        string
 	hostStorageClass string
 
-	coreClient                ctlv1.Interface
-	storageClient             ctlstoragev1.Interface
-	virtSubresourceRestClient kubecli.KubevirtClient
+	coreClient    ctlv1.Interface
+	storageClient ctlstoragev1.Interface
+	virtClient    kubecli.KubevirtClient
+	lhClient      *lhclientset.Clientset
 
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, namespace string, hostStorageClass string) *ControllerServer {
+func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, namespace string, hostStorageClass string) *ControllerServer {
 	return &ControllerServer{
-		namespace:                 namespace,
-		hostStorageClass:          hostStorageClass,
-		coreClient:                coreClient,
-		storageClient:             storageClient,
-		virtSubresourceRestClient: virtClient,
+		namespace:        namespace,
+		hostStorageClass: hostStorageClass,
+		coreClient:       coreClient,
+		storageClient:    storageClient,
+		virtClient:       virtClient,
+		lhClient:         lhClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -273,7 +278,7 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		},
 	}
 
-	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).AddVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
+	if err := cs.virtClient.VirtualMachine(cs.namespace).AddVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to add volume to node %v: %v", req.GetNodeId(), err)
 	}
 
@@ -306,11 +311,32 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 			req.GetVolumeId(), pvc.Status.Phase)
 	}
 
+	volumeHotplugged := false
+	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), req.GetNodeId(), &metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get VMI %s: %v", req.GetNodeId(), err)
+	}
+	for _, volStatus := range vmi.Status.VolumeStatus {
+		if volStatus.Name == req.VolumeId && volStatus.HotplugVolume != nil {
+			volumeHotplugged = true
+			break
+		}
+	}
+
+	if !volumeHotplugged {
+		logrus.Infof("Volume %s is not attached to node %s. No need RemoVolume operation!", req.GetVolumeId(), req.GetNodeId())
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
 	opts := &kubevirtv1.RemoveVolumeOptions{
 		Name: req.VolumeId,
 	}
-	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
+	if err := cs.virtClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to remove volume %v from node %s: %v", req.VolumeId, req.GetNodeId(), err)
+	}
+
+	if cs.waitForVolumeUnplug(req.VolumeId, req.GetNodeId()) {
+		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to detach volume %s from node %s", req.GetVolumeId(), req.GetNodeId())
 	}
 
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
@@ -480,6 +506,62 @@ func (cs *ControllerServer) waitForPVCState(name string, stateDescription string
 				continue
 			}
 			if predicate(existVol) {
+				return true
+			}
+		}
+	}
+}
+
+func (cs *ControllerServer) waitForVolumeUnplug(volName, vmName string) bool {
+	timeoutTimer := time.NewTimer(timeoutAttachDetach)
+	defer timeoutTimer.Stop()
+	ticker := time.NewTicker(tickAttachDetach)
+	defer ticker.Stop()
+
+	timeout := timeoutTimer.C
+	tick := ticker.C
+
+	pvc, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, volName, metav1.GetOptions{})
+	if err != nil {
+		logrus.Warnf("waitForVolumeUnplug: error while waiting for volume %s to be unplugged from VM %s: %v", volName, vmName, err)
+		return false
+	}
+	lhVolumeName := pvc.Spec.VolumeName
+
+	unplugged := func() bool {
+		vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), vmName, &metav1.GetOptions{})
+		if err != nil {
+			logrus.Warnf("waitForVolumeUnplug: error while waiting for volume %s to be unplugged from VM %s: %v", volName, vmName, err)
+			return false
+		}
+		for _, volStatus := range vmi.Status.VolumeStatus {
+			if volStatus.Name == volName && volStatus.HotplugVolume != nil {
+				return false
+			}
+		}
+		return true
+	}
+
+	detached := func() bool {
+		volume, err := cs.lhClient.LonghornV1beta2().Volumes(LHVolumeNS).Get(context.TODO(), lhVolumeName, metav1.GetOptions{})
+		if err != nil {
+			logrus.Warnf("waitForVolumeDetach: error while waiting for volume %s to be detached from VM %s: %v", lhVolumeName, vmName, err)
+			return false
+		}
+		if volume.Status.State == lhv1beta2.VolumeStateDetached {
+			return true
+		}
+		return false
+	}
+
+	for {
+		select {
+		case <-timeout:
+			logrus.Warnf("waitForVolume Unplug/Detach: timeout while waiting for volume %s to be unplugged/deatched from VM %s", volName, vmName)
+			return false
+		case <-tick:
+			logrus.Debugf("Polling volume %s state for VM %s at %s", volName, vmName, time.Now().String())
+			if unplugged() && detached() {
 				return true
 			}
 		}

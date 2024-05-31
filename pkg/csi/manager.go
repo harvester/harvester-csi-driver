@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 
+	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/rancher/wrangler/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler/pkg/generated/controllers/storage"
 	"github.com/rancher/wrangler/pkg/kubeconfig"
@@ -74,7 +75,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 		return err
 	}
 
-	virtSubresourceClient, err := kubecli.GetKubevirtSubresourceClientFromFlags("", cfg.KubeConfig)
+	lhclient, err := lhclientset.NewForConfig(rest.CopyConfig(restConfig))
 	if err != nil {
 		return err
 	}
@@ -109,7 +110,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
 	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, nodeID, namespace)
-	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtSubresourceClient, namespace, cfg.HostStorageClass)
+	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtClient, lhclient, namespace, cfg.HostStorageClass)
 
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()
