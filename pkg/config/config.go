@@ -5,4 +5,5 @@ type Config struct {
 	KubeConfig       string
 	NodeID           string
 	HostStorageClass string
+	Debug            bool
 }

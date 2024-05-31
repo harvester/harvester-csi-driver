@@ -1,11 +1,13 @@
 package csi
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
 	"slices"
 
+	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/rancher/wrangler/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler/pkg/generated/controllers/storage"
 	"github.com/rancher/wrangler/pkg/kubeconfig"
@@ -73,7 +75,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 		return err
 	}
 
-	virtSubresourceClient, err := kubecli.GetKubevirtSubresourceClientFromFlags("", cfg.KubeConfig)
+	lhclient, err := lhclientset.NewForConfig(rest.CopyConfig(restConfig))
 	if err != nil {
 		return err
 	}
@@ -108,7 +110,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
 	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, nodeID, namespace)
-	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtSubresourceClient, namespace, cfg.HostStorageClass)
+	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtClient, lhclient, namespace, cfg.HostStorageClass)
 
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()
@@ -139,12 +141,12 @@ func discoverVMIName(nodeID string, vmis kubecli.VirtualMachineInstanceInterface
 		return false
 	}
 
-	instance, err := vmis.Get(nodeID, &metav1.GetOptions{})
+	instance, err := vmis.Get(context.TODO(), nodeID, &metav1.GetOptions{})
 	if err == nil && matches(instance.Status.Interfaces) {
 		return instance.Name, nil
 	}
 
-	instances, err := vmis.List(&metav1.ListOptions{})
+	instances, err := vmis.List(context.TODO(), &metav1.ListOptions{})
 	if err != nil {
 		return "", err
 	}

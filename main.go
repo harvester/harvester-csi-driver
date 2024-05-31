@@ -35,6 +35,12 @@ func main() {
 			Usage:       "kubeconfig to access host Harvester cluster",
 			Destination: &cfg.KubeConfig,
 		},
+		cli.BoolFlag{
+			Name:        "debug",
+			EnvVar:      "DEBUG",
+			Usage:       "enable debug loggging",
+			Destination: &cfg.Debug,
+		},
 		cli.StringFlag{
 			Name:        "host-storage-class",
 			Value:       "",
@@ -50,6 +56,7 @@ func main() {
 	app.Version = version.FriendlyVersion()
 	app.Flags = flags
 	app.Action = func(c *cli.Context) {
+		adjustLogs(&cfg)
 		if err := runCSI(c); err != nil {
 			logrus.Fatalf("Error running CSI driver: %v", err)
 		}
@@ -63,4 +70,12 @@ func main() {
 func runCSI(*cli.Context) error {
 	manager := csi.GetCSIManager()
 	return manager.Run(&cfg)
+}
+
+func adjustLogs(cfg *config.Config) {
+	logrus.SetOutput(os.Stdout)
+	if cfg.Debug {
+		logrus.SetLevel(logrus.DebugLevel)
+		logrus.Debugf("Loglevel set to %v", logrus.DebugLevel)
+	}
 }

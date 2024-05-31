@@ -59,7 +59,7 @@ func (ns *NodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 		return nil, status.Error(codes.InvalidArgument, "Missing volume capability in request")
 	}
 
-	vmi, err := ns.virtClient.VirtualMachineInstance(ns.namespace).Get(ns.nodeID, &metav1.GetOptions{})
+	vmi, err := ns.virtClient.VirtualMachineInstance(ns.namespace).Get(context.TODO(), ns.nodeID, &metav1.GetOptions{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to get VMI %v: %v", ns.nodeID, err)
 	}
