@@ -273,7 +273,7 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		},
 	}
 
-	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).AddVolume(req.GetNodeId(), opts); err != nil {
+	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).AddVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to add volume to node %v: %v", req.GetNodeId(), err)
 	}
 
@@ -309,7 +309,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 	opts := &kubevirtv1.RemoveVolumeOptions{
 		Name: req.VolumeId,
 	}
-	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).RemoveVolume(req.GetNodeId(), opts); err != nil {
+	if err := cs.virtSubresourceRestClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to remove volume %v from node %s: %v", req.VolumeId, req.GetNodeId(), err)
 	}
 

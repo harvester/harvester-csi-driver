@@ -1,6 +1,7 @@
 package csi
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -139,12 +140,12 @@ func discoverVMIName(nodeID string, vmis kubecli.VirtualMachineInstanceInterface
 		return false
 	}
 
-	instance, err := vmis.Get(nodeID, &metav1.GetOptions{})
+	instance, err := vmis.Get(context.TODO(), nodeID, &metav1.GetOptions{})
 	if err == nil && matches(instance.Status.Interfaces) {
 		return instance.Name, nil
 	}
 
-	instances, err := vmis.List(&metav1.ListOptions{})
+	instances, err := vmis.List(context.TODO(), &metav1.ListOptions{})
 	if err != nil {
 		return "", err
 	}
