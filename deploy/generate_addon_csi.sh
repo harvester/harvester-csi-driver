@@ -109,8 +109,12 @@ set_kube_config_values() {
   CLUSTER_NAME=$(kubectl config get-contexts "$context" | awk '{print $3}' | tail -n 1)
   echo "Cluster name: ${CLUSTER_NAME}"
 
-  ENDPOINT=$(kubectl config view \
-    -o jsonpath="{.clusters[?(@.name == \"${CLUSTER_NAME}\")].cluster.server}")
+  ENDPOINT=$(echo "https://"$(kubectl -n harvester-system get cm vip -o jsonpath="{.data.ip}")":6443")
+  curl -k -ss $ENDPOINT 2>&1 > /dev/null
+  if [ $? -ne 0 ]; then
+        echo "ENDPOINT not reachable!"
+        exit 1
+  fi  
   echo "Endpoint: ${ENDPOINT}"
 
   # Set up the config
