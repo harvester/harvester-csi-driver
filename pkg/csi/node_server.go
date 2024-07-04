@@ -8,6 +8,11 @@ import (
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	cmd "github.com/harvester/go-common/command"
+	common "github.com/harvester/go-common/common"
+	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
+	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
+	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/pkg/errors"
 	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
@@ -17,7 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kubernetes/pkg/volume/util/hostutil"
 	"k8s.io/mount-utils"
-	utilexec "k8s.io/utils/exec"
+	"k8s.io/utils/exec"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 )
@@ -25,14 +30,17 @@ import (
 var hostUtil = hostutil.NewHostUtil()
 
 type NodeServer struct {
-	namespace  string
-	coreClient ctlv1.Interface
-	virtClient kubecli.KubevirtClient
-	nodeID     string
-	caps       []*csi.NodeServiceCapability
+	namespace       string
+	coreClient      ctlv1.Interface
+	virtClient      kubecli.KubevirtClient
+	nodeID          string
+	caps            []*csi.NodeServiceCapability
+	vip             string
+	lhClient        *lhclientset.Clientset
+	harvNetFSClient *harvnetworkfsset.Clientset
 }
 
-func NewNodeServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, nodeID string, namespace string) *NodeServer {
+func NewNodeServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, harvNetFSClient *harvnetworkfsset.Clientset, nodeID string, namespace, vip string) *NodeServer {
 	return &NodeServer{
 		coreClient: coreClient,
 		virtClient: virtClient,
@@ -41,8 +49,112 @@ func NewNodeServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient
 		caps: getNodeServiceCapabilities(
 			[]csi.NodeServiceCapability_RPC_Type{
 				csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
+				csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
 			}),
+		vip:             vip,
+		lhClient:        lhClient,
+		harvNetFSClient: harvNetFSClient,
 	}
+}
+
+func (ns *NodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+	volCaps := req.GetVolumeCapability()
+	if volCaps == nil {
+		return nil, status.Error(codes.InvalidArgument, "Missing volume capability in request")
+	}
+
+	volAccessMode := volCaps.GetAccessMode().GetMode()
+	if volAccessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+		return ns.nodeStageRWXVolume(req)
+	}
+	return &csi.NodeStageVolumeResponse{}, nil
+}
+
+func (ns *NodeServer) nodeStageRWXVolume(req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+	logrus.Infof("NodeStageVolume is called with req %+v", req)
+
+	stagingTargetPath := req.GetStagingTargetPath()
+	if stagingTargetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "staging target path missing in request")
+	}
+
+	volumeCapability := req.GetVolumeCapability()
+	if volumeCapability == nil {
+		return nil, status.Error(codes.InvalidArgument, "volume capability missing in request")
+	}
+
+	volName := req.GetVolumeId()
+	pvc, err := ns.coreClient.PersistentVolumeClaim().Get(ns.namespace, volName, metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get PVC %v: %v", volName, err)
+	}
+	lhVolName := pvc.Spec.VolumeName
+	networkfs, err := ns.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), lhVolName, metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFS %v: %v", lhVolName, err)
+	}
+	if networkfs.Status.Status != networkfsv1.EndpointStatusReady {
+		return nil, status.Errorf(codes.Internal, "NetworkFS %v is not ready", lhVolName)
+	}
+	// basically, we are using NFSv4, update the args
+	mountOpts := "vers=4"
+	if networkfs.Status.MountOpts != "" {
+		mountOpts = networkfs.Status.MountOpts
+	}
+
+	volumeEndpoint := networkfs.Status.Endpoint
+	logrus.Debugf("volumeServerEndpoint: %s", volumeEndpoint)
+	export := fmt.Sprintf("%s:/%s", volumeEndpoint, lhVolName)
+	logrus.Debugf("full endpoint: %s", export)
+	args := []string{"-t", "nfs", "-o", mountOpts}
+	args = append(args, export, stagingTargetPath)
+	logrus.Debugf("target args: %v", args)
+
+	// do mount
+	nspace := common.GetHostNamespacePath("/proc")
+	executor, err := cmd.NewExecutorWithNS(nspace)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Could not create executor: %v", err)
+	}
+	logrus.Infof("Mounting volume %s to %s", req.VolumeId, stagingTargetPath)
+	_, err = executor.Execute("mount", args)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Could not mount %v for global path: %v", export, err)
+	}
+
+	return &csi.NodeStageVolumeResponse{}, nil
+}
+
+func (ns *NodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+	stagingTargetPath := req.GetStagingTargetPath()
+	if stagingTargetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "staging target path missing in request")
+	}
+
+	nspace := common.GetHostNamespacePath("/proc")
+	executor, err := cmd.NewExecutorWithNS(nspace)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Could not create executor: %v", err)
+	}
+
+	logrus.Infof("Unmounting volume %s from %s", req.VolumeId, stagingTargetPath)
+	out, err := executor.Execute("mountpoint", []string{stagingTargetPath})
+	if err != nil {
+		if strings.Contains(err.Error(), "is not a mountpoint") {
+			logrus.Infof("Volume %s is not mounted at %s, return directly.", req.VolumeId, stagingTargetPath)
+			return &csi.NodeUnstageVolumeResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "Could not check mountpoint %v: %v", stagingTargetPath, err)
+	}
+	if !strings.Contains(out, "is a mountpoint") {
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
+
+	if _, err := executor.Execute("umount", []string{stagingTargetPath}); err != nil {
+		return nil, status.Errorf(codes.Internal, "Could not unmount %v: %v", stagingTargetPath, err)
+	}
+
+	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
 // NodePublishVolume will mount the volume /dev/<hot_plug_device> to target_path
@@ -59,6 +171,46 @@ func (ns *NodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 		return nil, status.Error(codes.InvalidArgument, "Missing volume capability in request")
 	}
 
+	volAccessMode := volumeCapability.GetAccessMode().GetMode()
+	if volAccessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+		return ns.nodePublishRWXVolume(req, targetPath, volumeCapability)
+	} else if volAccessMode == csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
+		return ns.nodePublishRWOVolume(req, targetPath, volumeCapability)
+	}
+	return nil, status.Error(codes.InvalidArgument, "Invalid Access Mode, neither RWX nor RWO")
+}
+
+func (ns *NodeServer) nodePublishRWXVolume(req *csi.NodePublishVolumeRequest, targetPath string, _ *csi.VolumeCapability) (*csi.NodePublishVolumeResponse, error) {
+	stagingTargetPath := req.GetStagingTargetPath()
+	if stagingTargetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "staging target path missing in request")
+	}
+
+	// make sure the target path status (mounted, corrupted, not exist)
+	mounterInst := mount.New("")
+	mounted, err := mounterInst.IsMountPoint(targetPath)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(targetPath, 0750); err != nil {
+			return nil, status.Errorf(codes.Internal, "Could not create target dir %s: %v", targetPath, err)
+		}
+	}
+
+	// Already mounted, do nothing
+	if mounted {
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
+	logrus.Debugf("stagingTargetPath: %s, targetPath: %s", stagingTargetPath, targetPath)
+	mountOptions := []string{"bind"}
+	if err := mounterInst.Mount(stagingTargetPath, targetPath, "", mountOptions); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to bind mount volume %s to target path %s: %v", req.GetVolumeId(), targetPath, err)
+	}
+
+	return &csi.NodePublishVolumeResponse{}, nil
+
+}
+
+func (ns *NodeServer) nodePublishRWOVolume(req *csi.NodePublishVolumeRequest, targetPath string, volCaps *csi.VolumeCapability) (*csi.NodePublishVolumeResponse, error) {
 	vmi, err := ns.virtClient.VirtualMachineInstance(ns.namespace).Get(context.TODO(), ns.nodeID, &metav1.GetOptions{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to get VMI %v: %v", ns.nodeID, err)
@@ -82,18 +234,18 @@ func (ns *NodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 		return nil, status.Errorf(codes.Internal, "Failed to get device path for volume %v: %v", req.VolumeId, err)
 	}
 
-	mounter := &mount.SafeFormatAndMount{Interface: mount.New(""), Exec: utilexec.New()}
-	if volumeCapability.GetBlock() != nil {
+	mounter := &mount.SafeFormatAndMount{Interface: mount.New(""), Exec: exec.New()}
+	if volCaps.GetBlock() != nil {
 		return ns.nodePublishBlockVolume(req.GetVolumeId(), devicePath, targetPath, mounter)
-	} else if volumeCapability.GetMount() != nil {
+	} else if volCaps.GetMount() != nil {
 		// mounter assumes ext4 by default
-		fsType := volumeCapability.GetMount().GetFsType()
+		fsType := volCaps.GetMount().GetFsType()
 		if fsType == "" {
 			fsType = "ext4"
 		}
 
 		return ns.nodePublishMountVolume(req.GetVolumeId(), devicePath, targetPath,
-			fsType, volumeCapability.GetMount().GetMountFlags(), mounter)
+			fsType, volCaps.GetMount().GetMountFlags(), mounter)
 	}
 	return nil, status.Error(codes.InvalidArgument, "Invalid volume capability, neither Mount nor Block")
 }
@@ -214,14 +366,6 @@ func (ns *NodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 	logrus.Infof("NodeUnpublishVolume: unmounted volume %s from path %s", req.GetVolumeId(), targetPath)
 
 	return &csi.NodeUnpublishVolumeResponse{}, nil
-}
-
-func (ns *NodeServer) NodeStageVolume(context.Context, *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
-}
-
-func (ns *NodeServer) NodeUnstageVolume(context.Context, *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
 }
 
 func (ns *NodeServer) NodeGetVolumeStats(_ context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {

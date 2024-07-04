@@ -9,6 +9,7 @@ import (
 const (
 	deviceByIDDirectory = "/dev/disk/by-id/"
 	driverName          = "driver.harvesterhci.io"
+	LHName              = "Longhorn"
 )
 
 type volumeFilesystemStatistics struct {

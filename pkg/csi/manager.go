@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 
+	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/rancher/wrangler/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler/pkg/generated/controllers/storage"
@@ -80,6 +81,11 @@ func (m *Manager) Run(cfg *config.Config) error {
 		return err
 	}
 
+	harvNetworkFSClient, err := harvnetworkfsset.NewForConfig(rest.CopyConfig(restConfig))
+	if err != nil {
+		return err
+	}
+
 	nodeID := cfg.NodeID
 
 	ifaces, err := sysfsnet.Interfaces()
@@ -109,8 +115,8 @@ func (m *Manager) Run(cfg *config.Config) error {
 	}
 
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
-	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, nodeID, namespace)
-	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtClient, lhclient, namespace, cfg.HostStorageClass)
+	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, lhclient, harvNetworkFSClient, nodeID, namespace, restConfig.Host)
+	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtClient, lhclient, harvNetworkFSClient, namespace, cfg.HostStorageClass)
 
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()
