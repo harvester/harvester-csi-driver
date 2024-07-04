@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
+	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhv1beta2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
@@ -30,23 +32,25 @@ const (
 	timeoutAttachDetach = 60 * time.Second
 	tickAttachDetach    = 2 * time.Second
 	paramHostSC         = "hostStorageClass"
-	LHVolumeNS          = "longhorn-system"
+	LonghornNS          = "longhorn-system"
+	HarvesterNS         = "harvester-system"
 )
 
 type ControllerServer struct {
 	namespace        string
 	hostStorageClass string
 
-	coreClient    ctlv1.Interface
-	storageClient ctlstoragev1.Interface
-	virtClient    kubecli.KubevirtClient
-	lhClient      *lhclientset.Clientset
+	coreClient      ctlv1.Interface
+	storageClient   ctlstoragev1.Interface
+	virtClient      kubecli.KubevirtClient
+	lhClient        *lhclientset.Clientset
+	harvNetFSClient *harvnetworkfsset.Clientset
 
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, namespace string, hostStorageClass string) *ControllerServer {
+func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, harvNetFSClient *harvnetworkfsset.Clientset, namespace string, hostStorageClass string) *ControllerServer {
 	return &ControllerServer{
 		namespace:        namespace,
 		hostStorageClass: hostStorageClass,
@@ -54,6 +58,7 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 		storageClient:    storageClient,
 		virtClient:       virtClient,
 		lhClient:         lhClient,
+		harvNetFSClient:  harvNetFSClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -64,6 +69,7 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 		accessModes: getVolumeCapabilityAccessModes(
 			[]csi.VolumeCapability_AccessMode_Mode{
 				csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+				csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
 			}),
 	}
 }
@@ -95,7 +101,6 @@ func (cs *ControllerServer) validStorageClass(storageClassName string) error {
 
 func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	logrus.Infof("ControllerServer create volume req: %v", req)
-	targetSC := cs.hostStorageClass
 
 	if err := cs.validateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
 		logrus.Errorf("CreateVolume: invalid create volume req: %v", req)
@@ -107,6 +112,7 @@ func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolum
 		return nil, status.Error(codes.InvalidArgument, "Volume Name cannot be empty")
 	}
 	volumeCaps := req.GetVolumeCapabilities()
+	logrus.Debugf("Getting volumeCapabilities: %+v", volumeCaps)
 	if err := cs.validateVolumeCapabilities(volumeCaps); err != nil {
 		return nil, err
 	}
@@ -123,39 +129,6 @@ func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolum
 		return nil, status.Error(codes.Unimplemented, "")
 	}
 
-	// Create a PVC from the host cluster
-	volumeMode := corev1.PersistentVolumeBlock
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: cs.namespace,
-			Name:      req.Name,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
-			VolumeMode:  &volumeMode,
-		},
-	}
-
-	/*
-	 * Let's handle SC
-	 * SC define > controller define
-	 *
-	 * Checking mechanism:
-	 * 1. If guest cluster is not be allowed to list host cluster StorageClass, just continue.
-	 * 2. If guest cluster can list host cluster StorageClass, check it.
-	 */
-	if val, exists := volumeParameters[paramHostSC]; exists {
-		//If StorageClass has `hostStorageClass` parameter, check whether it is valid or not.
-		if err := cs.validStorageClass(val); err != nil {
-			return nil, err
-		}
-		targetSC = val
-	}
-	if targetSC != "" {
-		pvc.Spec.StorageClassName = pointer.StringPtr(targetSC)
-		logrus.Infof("Set up the target StorageClass to : %s", *pvc.Spec.StorageClassName)
-	}
-	logrus.Debugf("The PVC content wanted is: %+v", pvc)
 	volSizeBytes := int64(utils.MinimalVolumeSize)
 	if req.GetCapacityRange() != nil {
 		volSizeBytes = req.GetCapacityRange().GetRequiredBytes()
@@ -164,17 +137,44 @@ func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolum
 		logrus.Warnf("Request volume %v size %v is smaller than minimal size %v, set it to minimal size.", req.Name, volSizeBytes, utils.MinimalVolumeSize)
 		volSizeBytes = utils.MinimalVolumeSize
 	}
-	// Round up to multiple of 2 * 1024 * 1024
-	volSizeBytes = utils.RoundUpSize(volSizeBytes)
-	pvc.Spec.Resources = corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceStorage: *resource.NewQuantity(volSizeBytes, resource.BinarySI),
-		},
+
+	// Create a PVC from the host cluster
+	pvc, err := cs.generateHostClusterPVCFormat(req.Name, volumeCaps, volumeParameters, volSizeBytes)
+	if err != nil {
+		return nil, err
 	}
+	logrus.Debugf("The PVC content wanted is: %+v", pvc)
 
 	resPVC, err := cs.coreClient.PersistentVolumeClaim().Create(pvc)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if isLHRWXVolume(resPVC) {
+		if !cs.waitForLHVolumeName(resPVC.Name) {
+			return nil, status.Errorf(codes.DeadlineExceeded, "Failed to create volume %s", resPVC.Name)
+		}
+
+		resPVC, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, resPVC.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", resPVC.Name, err)
+		}
+
+		// that means the longhorn RWX volume (NFS), we need to create networkfilesystem CRD
+		networkfilesystem := &networkfsv1.NetworkFilesystem{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      resPVC.Spec.VolumeName,
+				Namespace: HarvesterNS,
+			},
+			Spec: networkfsv1.NetworkFSSpec{
+				NetworkFSName: resPVC.Spec.VolumeName,
+				DesiredState:  networkfsv1.NetworkFSStateDisabled,
+				Provisioner:   LHName,
+			},
+		}
+		if _, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Create(context.TODO(), networkfilesystem, metav1.CreateOptions{}); err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
 	}
 
 	return &csi.CreateVolumeResponse{
@@ -195,6 +195,25 @@ func (cs *ControllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	}
 	if err := cs.validateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
 		return nil, status.Errorf(codes.Internal, "Invalid delete volume req: %v", err)
+	}
+
+	resPVC, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", req.GetVolumeId(), err)
+	}
+	if errors.IsNotFound(err) {
+		return &csi.DeleteVolumeResponse{}, nil
+	}
+
+	if isLHRWXVolume(resPVC) {
+		// do no-op if the networkfilesystem is already deleted
+		if _, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), resPVC.Spec.VolumeName, metav1.GetOptions{}); err != nil && !errors.IsNotFound(err) {
+			return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", resPVC.Spec.VolumeName, err)
+		} else if err == nil {
+			if err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Delete(context.TODO(), resPVC.Spec.VolumeName, metav1.DeleteOptions{}); err != nil {
+				return nil, status.Errorf(codes.Internal, "Failed to delete NetworkFileSystem %s: %v", resPVC.Spec.VolumeName, err)
+			}
+		}
 	}
 
 	if err := cs.coreClient.PersistentVolumeClaim().Delete(cs.namespace, req.GetVolumeId(), &metav1.DeleteOptions{}); errors.IsNotFound(err) {
@@ -261,6 +280,15 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		return nil, status.Errorf(codes.Aborted, "The PVC %s in phase %v is not ready to be attached",
 			req.GetVolumeId(), pvc.Status.Phase)
 	}
+
+	// do no-op here with RWX volume
+	if volumeCapability.AccessMode.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+		if isLHRWXVolume(pvc) {
+			return cs.publishRWXVolume(pvc)
+		}
+		logrus.Info("Do no-op for non-LH RWX volume")
+		return &csi.ControllerPublishVolumeResponse{}, nil
+	}
 	lhVolumeName := pvc.Spec.VolumeName
 
 	// we should wait for the volume to be detached from the previous node
@@ -323,6 +351,9 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 			req.GetVolumeId(), pvc.Status.Phase)
 	}
 
+	if isLHRWXVolume(pvc) {
+		return cs.unpublishRWXVolume(pvc)
+	}
 	volumeHotplugged := false
 	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), req.GetNodeId(), &metav1.GetOptions{})
 	if err != nil {
@@ -371,6 +402,10 @@ func (cs *ControllerServer) DeleteSnapshot(context.Context, *csi.DeleteSnapshotR
 }
 
 func (cs *ControllerServer) ListSnapshots(context.Context, *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (cs *ControllerServer) ControllerModifyVolume(context.Context, *csi.ControllerModifyVolumeRequest) (*csi.ControllerModifyVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
@@ -428,6 +463,46 @@ func (cs *ControllerServer) ControllerExpandVolume(_ context.Context, req *csi.C
 	}, nil
 }
 
+func (cs *ControllerServer) publishRWXVolume(pvc *corev1.PersistentVolumeClaim) (*csi.ControllerPublishVolumeResponse, error) {
+	networkfs, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), pvc.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
+	}
+
+	if networkfs.Spec.DesiredState == networkfsv1.NetworkFSStateEnabled || networkfs.Status.State == networkfsv1.NetworkFSStateEnabling {
+		// do nothing if the networkfilesystem is already enabled
+		return &csi.ControllerPublishVolumeResponse{}, nil
+	}
+
+	networkfs.Spec.DesiredState = networkfsv1.NetworkFSStateEnabled
+	if _, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Update(context.TODO(), networkfs, metav1.UpdateOptions{}); err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to enable NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
+	}
+	return &csi.ControllerPublishVolumeResponse{}, nil
+}
+
+func (cs *ControllerServer) unpublishRWXVolume(pvc *corev1.PersistentVolumeClaim) (*csi.ControllerUnpublishVolumeResponse, error) {
+	networkfs, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), pvc.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
+	}
+
+	if errors.IsNotFound(err) {
+		// do nothing if the networkfilesystem is already deleted
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+	if networkfs.Spec.DesiredState == networkfsv1.NetworkFSStateDisabled || networkfs.Status.State == networkfsv1.NetworkFSStateDisabling {
+		// do nothing if the networkfilesystem is already disabled
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	networkfs.Spec.DesiredState = networkfsv1.NetworkFSStateDisabled
+	if _, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Update(context.TODO(), networkfs, metav1.UpdateOptions{}); err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to disable NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
+	}
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
 func (cs *ControllerServer) validateControllerServiceRequest(c csi.ControllerServiceCapability_RPC_Type) error {
 	if c == csi.ControllerServiceCapability_RPC_UNKNOWN {
 		return nil
@@ -469,61 +544,6 @@ func (cs *ControllerServer) validateVolumeCapabilities(volumeCaps []*csi.VolumeC
 	return nil
 }
 
-func getControllerServiceCapabilities(cl []csi.ControllerServiceCapability_RPC_Type) []*csi.ControllerServiceCapability {
-	var cscs = make([]*csi.ControllerServiceCapability, len(cl))
-
-	for _, cap := range cl {
-		logrus.Infof("Enabling controller service capability: %v", cap.String())
-		cscs = append(cscs, &csi.ControllerServiceCapability{
-			Type: &csi.ControllerServiceCapability_Rpc{
-				Rpc: &csi.ControllerServiceCapability_RPC{
-					Type: cap,
-				},
-			},
-		})
-	}
-
-	return cscs
-}
-
-func getVolumeCapabilityAccessModes(vc []csi.VolumeCapability_AccessMode_Mode) []*csi.VolumeCapability_AccessMode {
-	var vca = make([]*csi.VolumeCapability_AccessMode, len(vc))
-	for _, c := range vc {
-		logrus.Infof("Enabling volume access mode: %v", c.String())
-		vca = append(vca, &csi.VolumeCapability_AccessMode{Mode: c})
-	}
-	return vca
-}
-
-func waitForVolSettled(lhClient *lhclientset.Clientset, lhVolName, nodeID string) (bool, error) {
-	volume, err := lhClient.LonghornV1beta2().Volumes(LHVolumeNS).Get(context.TODO(), lhVolName, metav1.GetOptions{})
-	if err != nil {
-		logrus.Warnf("waitForVolumeSettled: error while waiting for volume %s to be settled. Err: %v", lhVolName, err)
-		return false, err
-	}
-	// check attached correctly
-	if volAttachedCorrectly(volume, nodeID) {
-		return true, nil
-	}
-	if volume.Status.State == lhv1beta2.VolumeStateDetached {
-		return true, nil
-	}
-	return false, fmt.Errorf("volume Status (not correctly): %s, CurrentNodeID: %s, ExpectedNodeID: %s", volume.Status.State, volume.Status.CurrentNodeID, nodeID)
-}
-
-func volAttachedCorrectly(volume *lhv1beta2.Volume, nodeID string) bool {
-	virtWorkloads := getVirtLauncherWorkloadsFromLHVolume(volume)
-	logrus.Debugf("Volume %s state: %s, currentNodeID: %s, nodeID: %v, virtWorkloads: %v", volume.Name, volume.Status.State, volume.Status.CurrentNodeID, nodeID, virtWorkloads)
-	if volume.Status.State == lhv1beta2.VolumeStateAttached {
-		for _, workload := range virtWorkloads {
-			if strings.Contains(workload, nodeID) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (cs *ControllerServer) waitForPVCState(name string, stateDescription string,
 	predicate func(pvc *corev1.PersistentVolumeClaim) bool) bool {
 	timer := time.NewTimer(timeoutAttachDetach)
@@ -553,6 +573,154 @@ func (cs *ControllerServer) waitForPVCState(name string, stateDescription string
 	}
 }
 
+func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []*csi.VolumeCapability, volumeParameters map[string]string, volSizeBytes int64) (*corev1.PersistentVolumeClaim, error) {
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: cs.namespace,
+			Name:      name,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		},
+	}
+
+	volumeMode := cs.getVolumeMode(volCaps)
+	targetSC, err := cs.getStorageClass(volumeParameters)
+	if err != nil {
+		logrus.Errorf("Failed to get the StorageClass: %v", err)
+		return nil, err
+	}
+	// Round up to multiple of 2 * 1024 * 1024
+	volSizeBytes = utils.RoundUpSize(volSizeBytes)
+
+	pvc.Spec.VolumeMode = &volumeMode
+	if targetSC != "" {
+		pvc.Spec.StorageClassName = pointer.StringPtr(targetSC)
+	}
+	pvc.Spec.Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceStorage: *resource.NewQuantity(volSizeBytes, resource.BinarySI),
+		},
+	}
+	return pvc, nil
+}
+
+func (cs *ControllerServer) getVolumeMode(volCaps []*csi.VolumeCapability) corev1.PersistentVolumeMode {
+	for _, volCap := range volCaps {
+		if volCap.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			return corev1.PersistentVolumeFilesystem
+		}
+		if volCap.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
+			return corev1.PersistentVolumeBlock
+		}
+	}
+	return ""
+}
+
+func (cs *ControllerServer) getStorageClass(volParameters map[string]string) (string, error) {
+	/*
+	 * Let's handle SC
+	 * SC define > controller define
+	 *
+	 * Checking mechanism:
+	 * 1. If guest cluster is not be allowed to list host cluster StorageClass, just continue.
+	 * 2. If guest cluster can list host cluster StorageClass, check it.
+	 */
+	targetSC := cs.hostStorageClass
+	if val, exists := volParameters[paramHostSC]; exists {
+		//If StorageClass has `hostStorageClass` parameter, check whether it is valid or not.
+		if err := cs.validStorageClass(val); err != nil {
+			return "", err
+		}
+		targetSC = val
+	}
+	return targetSC, nil
+}
+
+func getControllerServiceCapabilities(cl []csi.ControllerServiceCapability_RPC_Type) []*csi.ControllerServiceCapability {
+	var cscs = make([]*csi.ControllerServiceCapability, len(cl))
+
+	for _, cap := range cl {
+		logrus.Infof("Enabling controller service capability: %v", cap.String())
+		cscs = append(cscs, &csi.ControllerServiceCapability{
+			Type: &csi.ControllerServiceCapability_Rpc{
+				Rpc: &csi.ControllerServiceCapability_RPC{
+					Type: cap,
+				},
+			},
+		})
+	}
+
+	return cscs
+}
+
+func getVolumeCapabilityAccessModes(vc []csi.VolumeCapability_AccessMode_Mode) []*csi.VolumeCapability_AccessMode {
+	var vca = make([]*csi.VolumeCapability_AccessMode, len(vc))
+	for _, c := range vc {
+		logrus.Infof("Enabling volume access mode: %v", c.String())
+		vca = append(vca, &csi.VolumeCapability_AccessMode{Mode: c})
+	}
+	return vca
+}
+
+func waitForVolSettled(lhClient *lhclientset.Clientset, lhVolName, nodeID string) (bool, error) {
+	volume, err := lhClient.LonghornV1beta2().Volumes(LonghornNS).Get(context.TODO(), lhVolName, metav1.GetOptions{})
+	if err != nil {
+		logrus.Warnf("waitForVolumeSettled: error while waiting for volume %s to be settled. Err: %v", lhVolName, err)
+		return false, err
+	}
+	// check attached correctly
+	if volAttachedCorrectly(volume, nodeID) {
+		return true, nil
+	}
+	if volume.Status.State == lhv1beta2.VolumeStateDetached {
+		return true, nil
+	}
+	return false, fmt.Errorf("volume Status (not correctly): %s, CurrentNodeID: %s, ExpectedNodeID: %s", volume.Status.State, volume.Status.CurrentNodeID, nodeID)
+}
+
+func volAttachedCorrectly(volume *lhv1beta2.Volume, nodeID string) bool {
+	virtWorkloads := getVirtLauncherWorkloadsFromLHVolume(volume)
+	logrus.Debugf("Volume %s state: %s, currentNodeID: %s, nodeID: %v, virtWorkloads: %v", volume.Name, volume.Status.State, volume.Status.CurrentNodeID, nodeID, virtWorkloads)
+	if volume.Status.State == lhv1beta2.VolumeStateAttached {
+		for _, workload := range virtWorkloads {
+			if strings.Contains(workload, nodeID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (cs *ControllerServer) waitForLHVolumeName(pvcName string) bool {
+	timeoutTimer := time.NewTimer(timeoutAttachDetach)
+	defer timeoutTimer.Stop()
+	ticker := time.NewTicker(tickAttachDetach)
+	defer ticker.Stop()
+
+	timeout := timeoutTimer.C
+	tick := ticker.C
+
+	for {
+		select {
+		case <-timeout:
+			logrus.Warnf("waitForLHVolumeName: timeout while waiting for volume %s to be created", pvcName)
+			return false
+		case <-tick:
+			resPVC, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, pvcName, metav1.GetOptions{})
+			if err != nil {
+				logrus.Warnf("waitForLHVolumeName: error while waiting for volume %s to be created: %v", pvcName, err)
+				return false
+			}
+			if resPVC.Spec.VolumeName == "" {
+				logrus.Infof("volumeName is not set for PVC %s, continue to wait", pvcName)
+				continue
+			}
+			return true
+		}
+	}
+}
+
 func getVirtLauncherWorkloadsFromLHVolume(volume *lhv1beta2.Volume) []string {
 	virtWorkloads := []string{}
 	for _, workload := range volume.Status.KubernetesStatus.WorkloadsStatus {
@@ -561,4 +729,19 @@ func getVirtLauncherWorkloadsFromLHVolume(volume *lhv1beta2.Volume) []string {
 		}
 	}
 	return virtWorkloads
+}
+
+func isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
+	if pvc.Spec.VolumeMode == nil || *pvc.Spec.VolumeMode != corev1.PersistentVolumeFilesystem {
+		return false
+	}
+	if len(pvc.Spec.AccessModes) == 0 {
+		return false
+	}
+	for _, mode := range pvc.Spec.AccessModes {
+		if mode == corev1.ReadWriteMany {
+			return true
+		}
+	}
+	return false
 }
