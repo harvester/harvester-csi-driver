@@ -51,6 +51,12 @@ type ControllerServer struct {
 }
 
 func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, harvNetFSClient *harvnetworkfsset.Clientset, namespace string, hostStorageClass string) *ControllerServer {
+	accessMode := []csi.VolumeCapability_AccessMode_Mode{
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+	}
+	if _, err := harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).List(context.TODO(), metav1.ListOptions{}); err == nil {
+		accessMode = append(accessMode, csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER)
+	}
 	return &ControllerServer{
 		namespace:        namespace,
 		hostStorageClass: hostStorageClass,
@@ -66,11 +72,7 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 				csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
 			}),
-		accessModes: getVolumeCapabilityAccessModes(
-			[]csi.VolumeCapability_AccessMode_Mode{
-				csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-				csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
-			}),
+		accessModes: getVolumeCapabilityAccessModes(accessMode),
 	}
 }
 
