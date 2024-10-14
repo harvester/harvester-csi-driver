@@ -9,9 +9,9 @@ import (
 
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
-	"github.com/rancher/wrangler/pkg/generated/controllers/core"
-	"github.com/rancher/wrangler/pkg/generated/controllers/storage"
-	"github.com/rancher/wrangler/pkg/kubeconfig"
+	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
+	"github.com/rancher/wrangler/v3/pkg/generated/controllers/storage"
+	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
@@ -147,12 +147,12 @@ func discoverVMIName(nodeID string, vmis kubecli.VirtualMachineInstanceInterface
 		return false
 	}
 
-	instance, err := vmis.Get(context.TODO(), nodeID, &metav1.GetOptions{})
+	instance, err := vmis.Get(context.TODO(), nodeID, metav1.GetOptions{})
 	if err == nil && matches(instance.Status.Interfaces) {
 		return instance.Name, nil
 	}
 
-	instances, err := vmis.List(context.TODO(), &metav1.ListOptions{})
+	instances, err := vmis.List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return "", err
 	}
