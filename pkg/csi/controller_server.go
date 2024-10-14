@@ -11,8 +11,8 @@ import (
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhv1beta2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
-	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
-	ctlstoragev1 "github.com/rancher/wrangler/pkg/generated/controllers/storage/v1"
+	ctlv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
+	ctlstoragev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/storage/v1"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -359,7 +359,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 		return cs.unpublishRWXVolume(pvc)
 	}
 	volumeHotplugged := false
-	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), req.GetNodeId(), &metav1.GetOptions{})
+	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), req.GetNodeId(), metav1.GetOptions{})
 	if err != nil {
 		// if the VMI already deleted, we can return success directly
 		if errors.IsNotFound(err) {
@@ -445,11 +445,12 @@ func (cs *ControllerServer) ControllerExpandVolume(_ context.Context, req *csi.C
 		}
 	}
 
-	pvc.Spec.Resources = corev1.ResourceRequirements{
+	pvc.Spec.Resources = corev1.VolumeResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceStorage: *resource.NewQuantity(req.CapacityRange.RequiredBytes, resource.BinarySI),
+			corev1.ResourceStorage: *resource.NewQuantity(req.CapacityRange.GetRequiredBytes(), resource.BinarySI),
 		},
 	}
+
 	if _, err := cs.coreClient.PersistentVolumeClaim().Update(pvc); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to update PVC %s: %v", req.GetVolumeId(), err)
 	}
@@ -601,7 +602,8 @@ func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []
 	if targetSC != "" {
 		pvc.Spec.StorageClassName = pointer.StringPtr(targetSC)
 	}
-	pvc.Spec.Resources = corev1.ResourceRequirements{
+
+	pvc.Spec.Resources = corev1.VolumeResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceStorage: *resource.NewQuantity(volSizeBytes, resource.BinarySI),
 		},

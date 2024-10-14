@@ -14,7 +14,7 @@ import (
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/pkg/errors"
-	ctlv1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
+	ctlv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -211,7 +211,7 @@ func (ns *NodeServer) nodePublishRWXVolume(req *csi.NodePublishVolumeRequest, ta
 }
 
 func (ns *NodeServer) nodePublishRWOVolume(req *csi.NodePublishVolumeRequest, targetPath string, volCaps *csi.VolumeCapability) (*csi.NodePublishVolumeResponse, error) {
-	vmi, err := ns.virtClient.VirtualMachineInstance(ns.namespace).Get(context.TODO(), ns.nodeID, &metav1.GetOptions{})
+	vmi, err := ns.virtClient.VirtualMachineInstance(ns.namespace).Get(context.TODO(), ns.nodeID, metav1.GetOptions{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to get VMI %v: %v", ns.nodeID, err)
 	}
