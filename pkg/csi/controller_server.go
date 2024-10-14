@@ -56,6 +56,8 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 	}
 	if _, err := harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).List(context.TODO(), metav1.ListOptions{}); err == nil {
 		accessMode = append(accessMode, csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER)
+	} else {
+		logrus.Warnf("Failed to list NetworkFilesystems, skip RWX volume support with error: %v", err)
 	}
 	return &ControllerServer{
 		namespace:        namespace,
