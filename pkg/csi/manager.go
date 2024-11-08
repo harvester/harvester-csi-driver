@@ -115,7 +115,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 	}
 
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
-	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, lhclient, harvNetworkFSClient, nodeID, namespace, restConfig.Host)
+	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, harvNetworkFSClient, nodeID, namespace, restConfig.Host)
 	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtClient, lhclient, harvNetworkFSClient, namespace, cfg.HostStorageClass)
 
 	// Create GRPC servers
