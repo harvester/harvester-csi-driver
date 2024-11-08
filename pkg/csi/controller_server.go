@@ -37,8 +37,9 @@ const (
 )
 
 type ControllerServer struct {
-	namespace        string
-	hostStorageClass string
+	namespace           string
+	hostStorageClass    string
+	checkLHVolumeStatus bool
 
 	coreClient      ctlv1.Interface
 	storageClient   ctlstoragev1.Interface
@@ -54,19 +55,26 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 	accessMode := []csi.VolumeCapability_AccessMode_Mode{
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 	}
+	checkLHVolumeStatus := true
+	// to handle well with previous Harvester cluster
 	if _, err := harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).List(context.TODO(), metav1.ListOptions{}); err == nil {
 		accessMode = append(accessMode, csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER)
 	} else {
 		logrus.Warnf("Failed to list NetworkFilesystems, skip RWX volume support with error: %v", err)
 	}
+	if _, err := lhClient.LonghornV1beta2().Volumes(LonghornNS).List(context.TODO(), metav1.ListOptions{}); err != nil {
+		logrus.Warnf("Failed to list Longhorn volumes, skip checking Longhorn volume status with error: %v", err)
+		checkLHVolumeStatus = false
+	}
 	return &ControllerServer{
-		namespace:        namespace,
-		hostStorageClass: hostStorageClass,
-		coreClient:       coreClient,
-		storageClient:    storageClient,
-		virtClient:       virtClient,
-		lhClient:         lhClient,
-		harvNetFSClient:  harvNetFSClient,
+		namespace:           namespace,
+		hostStorageClass:    hostStorageClass,
+		checkLHVolumeStatus: checkLHVolumeStatus,
+		coreClient:          coreClient,
+		storageClient:       storageClient,
+		virtClient:          virtClient,
+		lhClient:            lhClient,
+		harvNetFSClient:     harvNetFSClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -298,7 +306,7 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 	// we should wait for the volume to be detached from the previous node
 	// Wait until engine confirmed that rebuild started
 	if err := wait.PollUntilContextTimeout(context.Background(), tickAttachDetach, timeoutAttachDetach, true, func(context.Context) (bool, error) {
-		return waitForVolSettled(cs.lhClient, lhVolumeName, req.GetNodeId())
+		return waitForVolSettled(cs.lhClient, lhVolumeName, req.GetNodeId(), cs.checkLHVolumeStatus)
 	}); err != nil {
 		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to wait the volume %s status to settled", req.GetVolumeId())
 	}
@@ -669,7 +677,10 @@ func getVolumeCapabilityAccessModes(vc []csi.VolumeCapability_AccessMode_Mode) [
 	return vca
 }
 
-func waitForVolSettled(lhClient *lhclientset.Clientset, lhVolName, nodeID string) (bool, error) {
+func waitForVolSettled(lhClient *lhclientset.Clientset, lhVolName, nodeID string, checkLHVolumeStatus bool) (bool, error) {
+	if !checkLHVolumeStatus {
+		return true, nil
+	}
 	volume, err := lhClient.LonghornV1beta2().Volumes(LonghornNS).Get(context.TODO(), lhVolName, metav1.GetOptions{})
 	if err != nil {
 		logrus.Warnf("waitForVolumeSettled: error while waiting for volume %s to be settled. Err: %v", lhVolName, err)

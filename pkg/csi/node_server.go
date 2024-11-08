@@ -12,7 +12,6 @@ import (
 	common "github.com/harvester/go-common/common"
 	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
-	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/pkg/errors"
 	ctlv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
@@ -36,11 +35,10 @@ type NodeServer struct {
 	nodeID          string
 	caps            []*csi.NodeServiceCapability
 	vip             string
-	lhClient        *lhclientset.Clientset
 	harvNetFSClient *harvnetworkfsset.Clientset
 }
 
-func NewNodeServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, harvNetFSClient *harvnetworkfsset.Clientset, nodeID string, namespace, vip string) *NodeServer {
+func NewNodeServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, harvNetFSClient *harvnetworkfsset.Clientset, nodeID string, namespace, vip string) *NodeServer {
 	return &NodeServer{
 		coreClient: coreClient,
 		virtClient: virtClient,
@@ -52,7 +50,6 @@ func NewNodeServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient
 				csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
 			}),
 		vip:             vip,
-		lhClient:        lhClient,
 		harvNetFSClient: harvNetFSClient,
 	}
 }
