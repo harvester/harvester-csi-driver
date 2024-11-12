@@ -25,6 +25,8 @@ import (
 
 const (
 	defaultKubeconfigPath = "/etc/kubernetes/cloud-config"
+	calicoMacAddress      = "ee:ee:ee:ee:ee:ee"
+	loopBackMacAddress    = "00:00:00:00:00:00"
 )
 
 var errVMINotFound = errors.New("not found")
@@ -133,12 +135,21 @@ func discoverVMIName(nodeID string, vmis kubecli.VirtualMachineInstanceInterface
 
 	macs := make([]string, 0, len(ifaces))
 	for _, iface := range ifaces {
+		if iface.HardwareAddr.String() == calicoMacAddress || iface.HardwareAddr.String() == loopBackMacAddress {
+			continue
+		}
 		macs = append(macs, iface.HardwareAddr.String())
 	}
 
-	matches := func(ifaces []v1.VirtualMachineInstanceNetworkInterface) bool {
+	matches := func(ifaces []v1.VirtualMachineInstanceNetworkInterface, toLog bool) bool {
+		if toLog {
+			logrus.Infof("Current node macs: %v", macs)
+		}
 		for _, iface := range ifaces {
 			if mac, err := net.ParseMAC(iface.MAC); err == nil {
+				if toLog {
+					logrus.Infof("Compared iface: %v, mac: %v", iface, mac.String())
+				}
 				if slices.Contains(macs, mac.String()) {
 					return true
 				}
@@ -148,7 +159,7 @@ func discoverVMIName(nodeID string, vmis kubecli.VirtualMachineInstanceInterface
 	}
 
 	instance, err := vmis.Get(context.TODO(), nodeID, metav1.GetOptions{})
-	if err == nil && matches(instance.Status.Interfaces) {
+	if err == nil && matches(instance.Status.Interfaces, false) {
 		return instance.Name, nil
 	}
 
@@ -158,7 +169,7 @@ func discoverVMIName(nodeID string, vmis kubecli.VirtualMachineInstanceInterface
 	}
 
 	for _, instance := range instances.Items {
-		if matches(instance.Status.Interfaces) {
+		if matches(instance.Status.Interfaces, true) {
 			return instance.Name, nil
 		}
 	}
