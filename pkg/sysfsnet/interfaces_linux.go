@@ -23,7 +23,23 @@ func Interfaces() ([]Interface, error) {
 	ifaces := make([]Interface, 0, 16)
 
 	readMACFromFile := func(s string) (string, error) {
+
+		// Check if parent exists and is a directory
+		parent := filepath.Dir(s)
+		info, err := os.Stat(parent)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", nil
+			}
+			return "", err
+		}
+
+		if !info.IsDir() {
+			return "", nil
+		}
+
 		f, err := os.Open(s)
+
 		if os.IsNotExist(err) {
 			return "", nil
 		}
