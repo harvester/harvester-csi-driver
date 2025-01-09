@@ -1,6 +1,6 @@
 module github.com/harvester/harvester-csi-driver
 
-go 1.22.7
+go 1.23
 
 replace (
 	k8s.io/api => k8s.io/api v0.30.3
