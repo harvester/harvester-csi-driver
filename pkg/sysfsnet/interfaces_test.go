@@ -27,6 +27,11 @@ func TestInterfaces(t *testing.T) {
 		}
 	}
 
+	nonDirPath := filepath.Join(sysClassNet, "bonding_masters")
+	if err := os.WriteFile(nonDirPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("os.WriteFile %q want err=<nil>, got err=%v", nonDirPath, err)
+	}
+
 	ifaces, err := Interfaces()
 	if err != nil {
 		t.Fatalf("want err=<nil>, got err=%v", err)
@@ -44,5 +49,10 @@ func TestInterfaces(t *testing.T) {
 
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("want MACs=%v, got MACs=%v", want, got)
+	}
+
+	// Ensure non-directory entry is ignored
+	if _, exists := got[""]; exists {
+		t.Fatalf("non-directory entry was incorrectly processed")
 	}
 }
