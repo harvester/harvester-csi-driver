@@ -13,8 +13,8 @@ func TestInterfaces(t *testing.T) {
 	defer func() { sysClassNet = origDir }()
 
 	dir := map[string]string{
-		"eth0": "ce:ce:ce:ce:ce:ce",
-		"lo":   "00:00:00:00:00:00",
+		"eth0":  "ce:ce:ce:ce:ce:ce",
+		"lo":    "00:00:00:00:00:00",
 		"bond0": "aa:00:00:00:00:11",
 	}
 
