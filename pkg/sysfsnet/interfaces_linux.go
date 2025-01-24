@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/sirupsen/logrus"
 )
 
 var sysClassNet = "/sys/class/net"
@@ -47,11 +49,13 @@ func Interfaces() ([]Interface, error) {
 		// os.Stat to follow symlinks and return the info of the target
 		info, err := os.Stat(entryPath)
 		if err != nil {
+			logrus.Warnf("Unable to stat %s: %v", entryPath, err)
 			continue
 		}
 
 		// os.FileInfo.IsDir to check if the entry is a directory
 		if !info.IsDir() {
+			logrus.Warnf("Skipping non-directory entry %s", entryPath)
 			continue
 		}
 
@@ -66,6 +70,7 @@ func Interfaces() ([]Interface, error) {
 		hwText = strings.TrimSpace(hwText)
 		hw, err := net.ParseMAC(hwText)
 		if err != nil {
+			logrus.Warnf("Unable to parse MAC %s: %v", hwText, err)
 			continue
 		}
 

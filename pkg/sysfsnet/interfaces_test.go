@@ -15,6 +15,7 @@ func TestInterfaces(t *testing.T) {
 	dir := map[string]string{
 		"eth0": "ce:ce:ce:ce:ce:ce",
 		"lo":   "00:00:00:00:00:00",
+		"bond0": "aa:00:00:00:00:11",
 	}
 
 	for subdir, address := range dir {
@@ -27,9 +28,16 @@ func TestInterfaces(t *testing.T) {
 		}
 	}
 
-	nonDirPath := filepath.Join(sysClassNet, "bonding_masters")
-	if err := os.WriteFile(nonDirPath, []byte(""), 0o644); err != nil {
-		t.Fatalf("os.WriteFile %q want err=<nil>, got err=%v", nonDirPath, err)
+	// Test for non-directory entry
+	nonDir := map[string]string{
+		"bonding_masters": "+bond0",
+	}
+
+	for subdir, content := range nonDir {
+		path := filepath.Join(sysClassNet, subdir)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("os.WriteFile %q want err=<nil>, got err=%v", path, err)
+		}
 	}
 
 	ifaces, err := Interfaces()
@@ -45,14 +53,11 @@ func TestInterfaces(t *testing.T) {
 	want := map[string]struct{}{
 		"ce:ce:ce:ce:ce:ce": {},
 		"00:00:00:00:00:00": {},
+		"aa:00:00:00:00:11": {},
 	}
 
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("want MACs=%v, got MACs=%v", want, got)
 	}
 
-	// Ensure non-directory entry is ignored
-	if _, exists := got[""]; exists {
-		t.Fatalf("non-directory entry was incorrectly processed")
-	}
 }
