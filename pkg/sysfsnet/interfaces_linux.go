@@ -25,9 +25,7 @@ func Interfaces() ([]Interface, error) {
 	ifaces := make([]Interface, 0, 16)
 
 	readMACFromFile := func(s string) (string, error) {
-
 		f, err := os.Open(s)
-
 		if os.IsNotExist(err) {
 			return "", nil
 		}
@@ -43,7 +41,6 @@ func Interfaces() ([]Interface, error) {
 	}
 
 	for _, dentry := range dents {
-
 		entryPath := filepath.Join(sysClassNet, dentry.Name())
 
 		// os.Stat to follow symlinks and return the info of the target
