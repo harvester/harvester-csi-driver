@@ -60,5 +60,4 @@ func TestInterfaces(t *testing.T) {
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("want MACs=%v, got MACs=%v", want, got)
 	}
-
 }
