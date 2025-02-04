@@ -13,9 +13,11 @@ func TestInterfaces(t *testing.T) {
 	defer func() { sysClassNet = origDir }()
 
 	dir := map[string]string{
-		"eth0":  "ce:ce:ce:ce:ce:ce",
-		"lo":    "00:00:00:00:00:00",
-		"bond0": "aa:00:00:00:00:11",
+		"eth0":   "ce:ce:ce:ce:ce:ce",
+		"lo":     "00:00:00:00:00:00",
+		"bond0":  "aa:00:00:00:00:11",
+		"dummy0": "invalid", // invalid MAC address should be skipped
+		"dummy1": "",        // empty MAC address should be skipped
 	}
 
 	for subdir, address := range dir {
@@ -28,9 +30,8 @@ func TestInterfaces(t *testing.T) {
 		}
 	}
 
-	// Test for non-directory entry
 	nonDir := map[string]string{
-		"bonding_masters": "+bond0",
+		"bonding_masters": "+bond0", // non-directory should be skipped
 	}
 
 	for subdir, content := range nonDir {
