@@ -422,6 +422,10 @@ func (cs *ControllerServer) ControllerModifyVolume(context.Context, *csi.Control
 }
 
 func (cs *ControllerServer) ControllerExpandVolume(_ context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
+	if req.GetVolumeCapability() == nil {
+		return nil, status.Error(codes.InvalidArgument, "Missing volume capability in request")
+	}
+
 	pvc, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", req.GetVolumeId(), err)
@@ -430,49 +434,26 @@ func (cs *ControllerServer) ControllerExpandVolume(_ context.Context, req *csi.C
 		return nil, status.Errorf(codes.NotFound, "The volume %s does not exist", req.GetVolumeId())
 	}
 
-	if pvc.Spec.Resources.Requests.Storage().Value() > req.CapacityRange.GetRequiredBytes() {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"Volume shrink is not supported: request size %v is less than current size %v",
-			req.CapacityRange.GetRequiredBytes(),
-			pvc.Spec.Resources.Requests.Storage().Value(),
-		)
+	reqSize := req.CapacityRange.GetRequiredBytes()
+	currentSize := pvc.Spec.Resources.Requests.Storage().Value()
+	if currentSize > reqSize {
+		return nil, status.Errorf(codes.FailedPrecondition, "Volume shrink is not supported: request size %v is less than current size %v", reqSize, currentSize)
 	}
 
-	// Check if volume is in use by PVC references in pods' spec
-	podList, err := cs.coreClient.Pod().List(cs.namespace, metav1.ListOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to list pods: %v", err)
-	}
-
-	for _, pod := range podList.Items {
-		for _, vol := range pod.Spec.Volumes {
-			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == req.GetVolumeId() {
-				// Volume is in use. Support offline expansion only
-				return nil, status.Errorf(codes.FailedPrecondition, "Volume %s is in use. Online volume expansion is not supported.", req.GetVolumeId())
-			}
-		}
-	}
-
-	pvc.Spec.Resources = corev1.VolumeResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceStorage: *resource.NewQuantity(req.CapacityRange.GetRequiredBytes(), resource.BinarySI),
-		},
-	}
-
+	pvc.Spec.Resources.Requests[corev1.ResourceStorage] = *resource.NewQuantity(reqSize, resource.BinarySI)
 	if _, err := cs.coreClient.PersistentVolumeClaim().Update(pvc); err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to update PVC %s: %v", req.GetVolumeId(), err)
 	}
 
-	checkPVCExpanded := func(vol *corev1.PersistentVolumeClaim) bool {
-		return vol.Status.Capacity.Storage().Value() >= req.CapacityRange.GetRequiredBytes()
+	if !cs.waitForPVCState(req.VolumeId, "Expanded", func(vol *corev1.PersistentVolumeClaim) bool {
+		return vol.Status.Capacity.Storage().Value() >= reqSize
+	}) {
+		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to expand volume %s", req.GetVolumeId())
 	}
 
-	if !cs.waitForPVCState(req.VolumeId, "Expanded", checkPVCExpanded) {
-		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to expand volume %s ", req.GetVolumeId())
-	}
 	return &csi.ControllerExpandVolumeResponse{
-		CapacityBytes:         req.CapacityRange.GetRequiredBytes(),
-		NodeExpansionRequired: false,
+		CapacityBytes:         reqSize,
+		NodeExpansionRequired: cs.isVolumeInUse(req.GetVolumeId()),
 	}, nil
 }
 
@@ -758,6 +739,23 @@ func isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
 	for _, mode := range pvc.Spec.AccessModes {
 		if mode == corev1.ReadWriteMany {
 			return true
+		}
+	}
+	return false
+}
+
+func (cs *ControllerServer) isVolumeInUse(volumeID string) bool {
+	podList, err := cs.coreClient.Pod().List(cs.namespace, metav1.ListOptions{})
+	if err != nil {
+		logrus.Warnf("Failed to list pods: %v", err)
+		return false
+	}
+
+	for _, pod := range podList.Items {
+		for _, vol := range pod.Spec.Volumes {
+			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == volumeID {
+				return true
+			}
 		}
 	}
 	return false
