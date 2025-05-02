@@ -9,6 +9,7 @@ import (
 type IdentityServer struct {
 	driverName string
 	version    string
+	csi.UnimplementedIdentityServer
 }
 
 func NewIdentityServer(driverName, version string) *IdentityServer {

@@ -3,7 +3,10 @@ package csi
 import (
 	"os"
 
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/sys/unix"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -85,6 +88,22 @@ func makeFile(pathname string) error {
 		if !os.IsExist(err) {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateCtrlExpandReq validates the NodeExpandVolumeRequest.
+func validateCtrlExpandReq(req *csi.ControllerExpandVolumeRequest) error {
+	if req.GetVolumeId() == "" || req.GetVolumeCapability() == nil {
+		return status.Error(codes.InvalidArgument, missingVolumeInfoErr)
+	}
+	return nil
+}
+
+// validateNodeExpandReq validates the NodeExpandVolumeRequest.
+func validateNodeExpandReq(req *csi.NodeExpandVolumeRequest) error {
+	if req.GetVolumeId() == "" || req.GetVolumePath() == "" || req.GetVolumeCapability() == nil {
+		return status.Error(codes.InvalidArgument, missingVolumeInfoErr)
 	}
 	return nil
 }
