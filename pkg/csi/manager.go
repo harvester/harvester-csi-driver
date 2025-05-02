@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 
+	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
@@ -24,9 +25,10 @@ import (
 )
 
 const (
-	defaultKubeconfigPath = "/etc/kubernetes/cloud-config"
-	calicoMacAddress      = "ee:ee:ee:ee:ee:ee"
-	loopBackMacAddress    = "00:00:00:00:00:00"
+	defaultKubeconfigPath     = "/etc/kubernetes/cloud-config"
+	calicoMacAddress          = "ee:ee:ee:ee:ee:ee"
+	loopBackMacAddress        = "00:00:00:00:00:00"
+	csiOnlineExpandValidation = "csi-online-expand-validation"
 )
 
 var errVMINotFound = errors.New("not found")
@@ -88,6 +90,11 @@ func (m *Manager) Run(cfg *config.Config) error {
 		return err
 	}
 
+	harvClient, err := harvclient.NewForConfig(restConfig)
+	if err != nil {
+		return err
+	}
+
 	nodeID := cfg.NodeID
 
 	ifaces, err := sysfsnet.Interfaces()
@@ -117,8 +124,25 @@ func (m *Manager) Run(cfg *config.Config) error {
 	}
 
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
-	m.ns = NewNodeServer(coreClient.Core().V1(), virtClient, harvNetworkFSClient, nodeID, namespace, restConfig.Host)
-	m.cs = NewControllerServer(coreClient.Core().V1(), storageClient.Storage().V1(), virtClient, lhclient, harvNetworkFSClient, namespace, cfg.HostStorageClass)
+	m.ns = NewNodeServer(
+		coreClient.Core().V1(),
+		virtClient,
+		harvNetworkFSClient,
+		harvClient,
+		nodeID,
+		namespace,
+		restConfig.Host,
+	)
+	m.cs = NewControllerServer(
+		coreClient.Core().V1(),
+		storageClient.Storage().V1(),
+		virtClient,
+		lhclient,
+		harvNetworkFSClient,
+		harvClient,
+		namespace,
+		cfg.HostStorageClass,
+	)
 
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()
