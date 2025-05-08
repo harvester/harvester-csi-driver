@@ -1,0 +1,39 @@
+version: 2
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - gosec
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - prealloc
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - staticcheck
+        text: "QF1003:" # could use tagged switch on errCode (staticcheck)
+run:
+  timeout: 5m
+  tests: true
+linters-settings:
+  gosec:
+    # https://github.com/securego/gosec#available-rules
+    excludes:
+      - G101 # Look for hard coded credentials
+      - G108 # Profiling endpoint is automatically exposed on /debug/pprof
+      - G401 # Use of weak cryptographic primitive
+      - G402 # TLS InsecureSkipVerify set true
+      - G505 # Blocklisted import crypto/md5: weak cryptographic primitive
+    config:
+      G306: "0644" # Poor file permissions used when writing to a new file
+formatters:
+  enable:
+    - gofmt

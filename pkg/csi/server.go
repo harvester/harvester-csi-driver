@@ -98,8 +98,9 @@ func (s *NonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 
 	logrus.Infof("Listening for connections on address: %#v", listener.Addr())
 
-	server.Serve(listener)
-
+	if err := server.Serve(listener); err != nil {
+		logrus.Fatalf("Failed to serve: %v", err)
+	}
 }
 
 func parseEndpoint(ep string) (string, string, error) {
