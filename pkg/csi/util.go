@@ -39,6 +39,7 @@ func isBlockDevice(volumePath string) (bool, error) {
 	return false, nil
 }
 
+//nolint:gosec // G115: Potential hardcoded credentials
 func getFilesystemStatistics(volumePath string) (*volumeFilesystemStatistics, error) {
 	var statfs unix.Statfs_t
 	// See http://man7.org/linux/man-pages/man2/statfs.2.html for details.

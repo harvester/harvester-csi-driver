@@ -1,31 +1,31 @@
 module github.com/harvester/harvester-csi-driver
 
-go 1.23
+go 1.24.2
 
 replace (
+
+	github.com/openshift/api => github.com/openshift/api v0.0.0-20191219222812-2987a591a72c
+	github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20200521150516-05eb9880269c
 	k8s.io/api => k8s.io/api v0.30.3
 	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.30.3
 	k8s.io/client-go => k8s.io/client-go v0.30.3
-	k8s.io/code-generator => k8s.io/code-generator v0.30.3
-	k8s.io/metrics => k8s.io/metrics v0.30.3
 	k8s.io/cloud-provider => k8s.io/cloud-provider v0.30.3
 	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.30.3
+	k8s.io/code-generator => k8s.io/code-generator v0.30.3
 	k8s.io/cri-api => k8s.io/cri-api v0.30.3
 	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.30.3
 	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.30.3
 	k8s.io/endpointslice => k8s.io/endpointslice v0.30.3
 	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.30.3
+	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340
 	k8s.io/kube-proxy => k8s.io/kube-proxy v0.30.3
 	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.30.3
 	k8s.io/kubectl => k8s.io/kubectl v0.30.3
 	k8s.io/kubelet => k8s.io/kubelet v0.30.3
 	k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.30.3
+	k8s.io/metrics => k8s.io/metrics v0.30.3
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.30.3
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.30.3
-	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340
-
-	github.com/openshift/api => github.com/openshift/api v0.0.0-20191219222812-2987a591a72c
-	github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20200521150516-05eb9880269c
 
 	kubevirt.io/api => kubevirt.io/api v1.3.1
 	kubevirt.io/client-go => kubevirt.io/client-go v1.3.1

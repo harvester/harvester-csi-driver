@@ -25,7 +25,7 @@ func TestInterfaces(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll %q want err=<nil>, got err=%v", filepath.Dir(path), err)
 		}
-		if err := os.WriteFile(path, []byte(address), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(address), 0o600); err != nil {
 			t.Fatalf("os.WriteFile %q want err=<nil>, got err=%v", path, err)
 		}
 	}
@@ -36,7 +36,7 @@ func TestInterfaces(t *testing.T) {
 
 	for subdir, content := range nonDir {
 		path := filepath.Join(sysClassNet, subdir)
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatalf("os.WriteFile %q want err=<nil>, got err=%v", path, err)
 		}
 	}

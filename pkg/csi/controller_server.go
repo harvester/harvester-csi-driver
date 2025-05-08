@@ -21,7 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 
@@ -608,7 +608,7 @@ func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []
 
 	pvc.Spec.VolumeMode = &volumeMode
 	if targetSC != "" {
-		pvc.Spec.StorageClassName = pointer.StringPtr(targetSC)
+		pvc.Spec.StorageClassName = ptr.To(targetSC)
 	}
 
 	pvc.Spec.Resources = corev1.VolumeResourceRequirements{
