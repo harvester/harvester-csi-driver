@@ -443,6 +443,10 @@ func (cs *ControllerServer) ControllerExpandVolume(
 		return nil, err
 	}
 
+	if ctrlExpandRWX(req) {
+		return nil, status.Errorf(codes.Internal, "rwx volume expansion is not supported")
+	}
+
 	// Fetch PVC details
 	pvc, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
 	if err != nil || pvc.Spec.VolumeName == "" {
@@ -476,30 +480,32 @@ func (cs *ControllerServer) ControllerExpandVolume(
 		return nil, status.Errorf(codes.DeadlineExceeded, "PVC expansion timed out")
 	}
 
+	isVolumeInUse, err := cs.isVolumeInUse(req.GetVolumeId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to check if volume %s is in use: %v", req.GetVolumeId(), err)
+	}
+
 	// Return response
 	return &csi.ControllerExpandVolumeResponse{
 		CapacityBytes:         reqSize,
-		NodeExpansionRequired: cs.isVolumeInUse(req.GetVolumeId()),
+		NodeExpansionRequired: isVolumeInUse,
 	}, nil
 }
 
 func (cs *ControllerServer) validateOnlineExpansion(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
-	if !cs.isVolumeInUse(pvc.Name) {
+	isVolumeInUse, err := cs.isVolumeInUse(pvc.Name)
+	if err != nil {
+		return err
+	}
+
+	if !isVolumeInUse {
 		return nil
 	}
 
 	// Fetch online expansion setting
-	onlineExpansionSetting, err := cs.harvClient.HarvesterhciV1beta1().Settings().Get(ctx, csiOnlineExpandValidation, metav1.GetOptions{})
+	_, err = cs.harvClient.HarvesterhciV1beta1().Settings().Get(ctx, csiOnlineExpandValidation, metav1.GetOptions{})
 	if err != nil {
 		return status.Errorf(codes.Internal, "Failed to retrieve online expansion setting: %v", err)
-	}
-
-	valid, err := utils.ValidateCSIOnlineExpansion(pvc, onlineExpansionSetting)
-	if err != nil {
-		return status.Errorf(codes.FailedPrecondition, "Online expansion validation failed for PVC %s/%s: %v", pvc.Namespace, pvc.Name, err)
-	}
-	if !valid {
-		return status.Errorf(codes.FailedPrecondition, "Online expansion validation incomplete for PVC %s/%s", pvc.Namespace, pvc.Name)
 	}
 
 	return nil
@@ -792,19 +798,19 @@ func isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
 	return false
 }
 
-func (cs *ControllerServer) isVolumeInUse(volumeID string) bool {
+func (cs *ControllerServer) isVolumeInUse(volumeID string) (bool, error) {
 	podList, err := cs.coreClient.Pod().List(cs.namespace, metav1.ListOptions{})
 	if err != nil {
 		logrus.Warnf("Failed to list pods: %v", err)
-		return false
+		return false, fmt.Errorf("error listing pods: %w", err)
 	}
 
 	for _, pod := range podList.Items {
 		for _, vol := range pod.Spec.Volumes {
 			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == volumeID {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
