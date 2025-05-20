@@ -100,10 +100,36 @@ func validateCtrlExpandReq(req *csi.ControllerExpandVolumeRequest) error {
 	return nil
 }
 
+// ctrlExpandRWX checks if the volume capability access mode is MULTI_NODE_MULTI_WRITER.
+func ctrlExpandRWX(req *csi.ControllerExpandVolumeRequest) bool {
+	return req.GetVolumeCapability().GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER
+}
+
 // validateNodeExpandReq validates the NodeExpandVolumeRequest.
 func validateNodeExpandReq(req *csi.NodeExpandVolumeRequest) error {
 	if req.GetVolumeId() == "" || req.GetVolumePath() == "" || req.GetVolumeCapability() == nil {
 		return status.Error(codes.InvalidArgument, missingVolumeInfoErr)
 	}
 	return nil
+}
+
+// nodeExpandRWX checks if the volume capability access mode is MULTI_NODE_MULTI_WRITER.
+func nodeExpandRWX(req *csi.NodeExpandVolumeRequest) bool {
+	return req.GetVolumeCapability().GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER
+}
+
+// getNodeFsType retrieves the filesystem type from the NodeExpandVolumeRequest.
+// If the volume capability is type "block", it returns an error.
+// If the filesystem type is not specified, it defaults to "ext4".
+func getNodeFsType(req *csi.NodeExpandVolumeRequest) (string, error) {
+	if req.GetVolumeCapability().GetBlock() != nil {
+		return "", status.Error(codes.InvalidArgument, "Volume capability is block")
+	}
+
+	fsType := req.GetVolumeCapability().GetMount().GetFsType()
+	if fsType == "" {
+		return fsTypeExt4, nil
+	}
+
+	return fsType, nil
 }

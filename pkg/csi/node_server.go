@@ -23,11 +23,8 @@ import (
 	"k8s.io/kubernetes/pkg/volume/util/hostutil"
 	"k8s.io/mount-utils"
 	"k8s.io/utils/exec"
-	kubeexec "k8s.io/utils/exec"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
-
-	"github.com/harvester/harvester-csi-driver/pkg/utils"
 )
 
 var hostUtil = hostutil.NewHostUtil()
@@ -454,12 +451,6 @@ func (ns *NodeServer) NodeGetVolumeStats(_ context.Context, req *csi.NodeGetVolu
 	}, nil
 }
 
-func (ns *NodeServer) nodeExpandRWXVolume(req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
-	return &csi.NodeExpandVolumeResponse{
-		CapacityBytes: req.GetCapacityRange().GetRequiredBytes(),
-	}, nil
-}
-
 // Constants for repeated strings
 const (
 	fsTypeExt4           = "ext4"
@@ -473,14 +464,6 @@ const (
 	failedResizeErr      = "failed to resize fs on volume"
 )
 
-// // validateExpandVolumeRequest validates the NodeExpandVolumeRequest.
-// func validateExpandVolumeRequest(req *csi.NodeExpandVolumeRequest) error {
-// 	if req.GetVolumeId() == "" || req.GetVolumePath() == "" || req.GetVolumeCapability() == nil {
-// 		return status.Error(codes.InvalidArgument, missingVolumeInfoErr)
-// 	}
-// 	return nil
-// }
-
 func (ns *NodeServer) NodeExpandVolume(
 	ctx context.Context,
 	req *csi.NodeExpandVolumeRequest,
@@ -490,24 +473,13 @@ func (ns *NodeServer) NodeExpandVolume(
 		return nil, err
 	}
 
-	coevSetting, err := ns.harvClient.HarvesterhciV1beta1().Settings().Get(ctx, csiOnlineExpandValidation, metav1.GetOptions{})
+	if nodeExpandRWX(req) {
+		return nil, status.Errorf(codes.Internal, "rwx volume expansion is not supported")
+	}
+
+	_, err := ns.harvClient.HarvesterhciV1beta1().Settings().Get(ctx, csiOnlineExpandValidation, metav1.GetOptions{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to get online expansion validation: %v", err)
-	}
-
-	pvc, err := ns.coreClient.PersistentVolumeClaim().Get(ns.namespace, req.GetVolumeId(), metav1.GetOptions{})
-	if err != nil || pvc.Spec.VolumeName == "" {
-		return nil, status.Errorf(codes.NotFound, "PVC %s not found", req.GetVolumeId())
-	}
-
-	if valid, err := utils.ValidateCSIOnlineExpansion(pvc, coevSetting); err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "Online expansion validation err: %v for PVC %s/%s", err, pvc.Namespace, pvc.Name)
-	} else if !valid {
-		return nil, status.Errorf(codes.FailedPrecondition, "Validation incomplete for PVC %s/%s", pvc.Namespace, pvc.Name)
-	}
-
-	if req.GetVolumeCapability().GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
-		return ns.nodeExpandRWXVolume(req)
 	}
 
 	volumeID, volumePath := req.GetVolumeId(), req.GetVolumePath()
@@ -530,8 +502,13 @@ func (ns *NodeServer) NodeExpandVolume(
 		return nil, status.Errorf(codes.Internal, "%s %s: %v", failedDevicePathErr, volumeID, err)
 	}
 
-	mounter := &mount.SafeFormatAndMount{Interface: mount.New(""), Exec: kubeexec.New()}
-	if err := resizeFilesystem(devicePath, fsTypeExt4, mounter); err != nil {
+	fstype, err := getNodeFsType(req)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get filesystem type for volume %s: %v", volumeID, err)
+	}
+
+	mounter := &mount.SafeFormatAndMount{Interface: mount.New(""), Exec: exec.New()}
+	if err := resizeFilesystem(devicePath, fstype, mounter); err != nil {
 		return nil, status.Errorf(codes.Internal, "%s %s devPath %s: %v", failedResizeErr, volumeID, devicePath, err)
 	}
 
