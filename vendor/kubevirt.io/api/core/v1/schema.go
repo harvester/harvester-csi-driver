@@ -543,6 +543,9 @@ type SoundDevice struct {
 }
 
 type TPMDevice struct {
+	// Enabled allows a user to explictly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+	// Defaults to True
+	Enabled *bool `json:"enabled,omitempty"`
 	// Persistent indicates the state of the TPM device should be kept accross reboots
 	// Defaults to false
 	Persistent *bool `json:"persistent,omitempty"`
@@ -1241,7 +1244,7 @@ type Interface struct {
 	// Must match the Name of a Network.
 	Name string `json:"name"`
 	// Interface model.
-	// One of: e1000, e1000e, ne2k_pci, pcnet, rtl8139, virtio.
+	// One of: e1000, e1000e, igb, ne2k_pci, pcnet, rtl8139, virtio.
 	// Defaults to virtio.
 	// TODO:(ihar) switch to enums once opengen-api supports them. See: https://github.com/kubernetes/kube-openapi/issues/51
 	Model string `json:"model,omitempty"`
