@@ -5,6 +5,9 @@ package utils
 const (
 	SizeAlignment     = 2 * 1024 * 1024
 	MinimalVolumeSize = 10 * 1024 * 1024
+
+	AnnStorageProvisioner     = "volume.kubernetes.io/storage-provisioner"
+	AnnBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
 )
 
 func RoundUpSize(size int64) int64 {

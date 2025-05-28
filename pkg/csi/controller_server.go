@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhv1beta2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
@@ -46,12 +47,23 @@ type ControllerServer struct {
 	virtClient      kubecli.KubevirtClient
 	lhClient        *lhclientset.Clientset
 	harvNetFSClient *harvnetworkfsset.Clientset
+	harvClient      *harvclient.Clientset
 
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
+	csi.UnimplementedControllerServer
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, harvNetFSClient *harvnetworkfsset.Clientset, namespace string, hostStorageClass string) *ControllerServer {
+func NewControllerServer(
+	coreClient ctlv1.Interface,
+	storageClient ctlstoragev1.Interface,
+	virtClient kubecli.KubevirtClient,
+	lhClient *lhclientset.Clientset,
+	harvNetFSClient *harvnetworkfsset.Clientset,
+	harvClient *harvclient.Clientset,
+	namespace string,
+	hostStorageClass string,
+) *ControllerServer {
 	accessMode := []csi.VolumeCapability_AccessMode_Mode{
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 	}
@@ -75,6 +87,7 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 		virtClient:          virtClient,
 		lhClient:            lhClient,
 		harvNetFSClient:     harvNetFSClient,
+		harvClient:          harvClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -391,7 +404,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 		Name: req.VolumeId,
 	}
 	if err := cs.virtClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to remove volume %v from node %s: %v", req.VolumeId, req.GetNodeId(), err)
+		return nil, status.Errorf(codes.Internal, "Failed to remove volume %v from node %s: %v", req.GetVolumeId(), req.GetNodeId(), err)
 	}
 
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
@@ -421,59 +434,81 @@ func (cs *ControllerServer) ControllerModifyVolume(context.Context, *csi.Control
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (cs *ControllerServer) ControllerExpandVolume(_ context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
+func (cs *ControllerServer) ControllerExpandVolume(
+	ctx context.Context,
+	req *csi.ControllerExpandVolumeRequest,
+) (*csi.ControllerExpandVolumeResponse, error) {
+	// Validate request
+	if err := validateCtrlExpandReq(req); err != nil {
+		return nil, err
+	}
+
+	if ctrlExpandRWX(req) {
+		return nil, status.Errorf(codes.Internal, "rwx volume expansion is not supported")
+	}
+
+	// Fetch PVC details
 	pvc, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", req.GetVolumeId(), err)
-	}
-	if pvc.Spec.VolumeName == "" {
-		return nil, status.Errorf(codes.NotFound, "The volume %s does not exist", req.GetVolumeId())
+	if err != nil || pvc.Spec.VolumeName == "" {
+		return nil, status.Errorf(codes.NotFound, "PersistentVolumeClaim %s not found", req.GetVolumeId())
 	}
 
-	if pvc.Spec.Resources.Requests.Storage().Value() > req.CapacityRange.GetRequiredBytes() {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"Volume shrink is not supported: request size %v is less than current size %v",
-			req.CapacityRange.GetRequiredBytes(),
-			pvc.Spec.Resources.Requests.Storage().Value(),
-		)
+	// Validate online expansion
+	if err := cs.validateOnlineExpansion(ctx, pvc); err != nil {
+		return nil, err
 	}
 
-	// Check if volume is in use by PVC references in pods' spec
-	podList, err := cs.coreClient.Pod().List(cs.namespace, metav1.ListOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to list pods: %v", err)
+	// Validate requested size
+	if req.CapacityRange == nil {
+		return nil, status.Error(codes.InvalidArgument, "Capacity range is missing in the request")
+	}
+	reqSize := req.CapacityRange.GetRequiredBytes()
+	if pvc.Spec.Resources.Requests.Storage().Value() > reqSize {
+		return nil, status.Errorf(codes.FailedPrecondition, "Volume shrink is not supported")
 	}
 
-	for _, pod := range podList.Items {
-		for _, vol := range pod.Spec.Volumes {
-			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == req.GetVolumeId() {
-				// Volume is in use. Support offline expansion only
-				return nil, status.Errorf(codes.FailedPrecondition, "Volume %s is in use. Online volume expansion is not supported.", req.GetVolumeId())
-			}
-		}
-	}
-
-	pvc.Spec.Resources = corev1.VolumeResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceStorage: *resource.NewQuantity(req.CapacityRange.GetRequiredBytes(), resource.BinarySI),
-		},
-	}
-
+	// Update PVC size
+	pvc.Spec.Resources.Requests[corev1.ResourceStorage] = *resource.NewQuantity(reqSize, resource.BinarySI)
 	if _, err := cs.coreClient.PersistentVolumeClaim().Update(pvc); err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to update PVC %s: %v", req.GetVolumeId(), err)
+		return nil, status.Errorf(codes.Internal, "Failed to update PVC size: %v", err)
 	}
 
-	checkPVCExpanded := func(vol *corev1.PersistentVolumeClaim) bool {
-		return vol.Status.Capacity.Storage().Value() >= req.CapacityRange.GetRequiredBytes()
+	// Wait for PVC to reach the desired state
+	if !cs.waitForPVCState(req.VolumeId, "Expanded", func(vol *corev1.PersistentVolumeClaim) bool {
+		return vol.Status.Capacity.Storage().Value() >= reqSize
+	}) {
+		return nil, status.Errorf(codes.DeadlineExceeded, "PVC expansion timed out")
 	}
 
-	if !cs.waitForPVCState(req.VolumeId, "Expanded", checkPVCExpanded) {
-		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to expand volume %s ", req.GetVolumeId())
+	isVolumeInUse, err := cs.isVolumeInUse(req.GetVolumeId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to check if volume %s is in use: %v", req.GetVolumeId(), err)
 	}
+
+	// Return response
 	return &csi.ControllerExpandVolumeResponse{
-		CapacityBytes:         req.CapacityRange.GetRequiredBytes(),
-		NodeExpansionRequired: false,
+		CapacityBytes:         reqSize,
+		NodeExpansionRequired: isVolumeInUse,
 	}, nil
+}
+
+func (cs *ControllerServer) validateOnlineExpansion(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
+	isVolumeInUse, err := cs.isVolumeInUse(pvc.Name)
+	if err != nil {
+		return err
+	}
+
+	if !isVolumeInUse {
+		return nil
+	}
+
+	// Fetch online expansion setting
+	_, err = cs.harvClient.HarvesterhciV1beta1().Settings().Get(ctx, csiOnlineExpandValidation, metav1.GetOptions{})
+	if err != nil {
+		return status.Errorf(codes.Internal, "Failed to retrieve online expansion setting: %v", err)
+	}
+
+	return nil
 }
 
 func (cs *ControllerServer) publishRWXVolume(pvc *corev1.PersistentVolumeClaim) (*csi.ControllerPublishVolumeResponse, error) {
@@ -761,4 +796,21 @@ func isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
 		}
 	}
 	return false
+}
+
+func (cs *ControllerServer) isVolumeInUse(volumeID string) (bool, error) {
+	podList, err := cs.coreClient.Pod().List(cs.namespace, metav1.ListOptions{})
+	if err != nil {
+		logrus.Warnf("Failed to list pods: %v", err)
+		return false, fmt.Errorf("error listing pods: %w", err)
+	}
+
+	for _, pod := range podList.Items {
+		for _, vol := range pod.Spec.Volumes {
+			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == volumeID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }

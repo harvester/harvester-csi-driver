@@ -10,6 +10,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	cmd "github.com/harvester/go-common/command"
 	common "github.com/harvester/go-common/common"
+	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	"github.com/pkg/errors"
@@ -36,9 +37,19 @@ type NodeServer struct {
 	caps            []*csi.NodeServiceCapability
 	vip             string
 	harvNetFSClient *harvnetworkfsset.Clientset
+	harvClient      *harvclient.Clientset
+	csi.UnimplementedNodeServer
 }
 
-func NewNodeServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient, harvNetFSClient *harvnetworkfsset.Clientset, nodeID string, namespace, vip string) *NodeServer {
+func NewNodeServer(
+	coreClient ctlv1.Interface,
+	virtClient kubecli.KubevirtClient,
+	harvNetFSClient *harvnetworkfsset.Clientset,
+	harvClient *harvclient.Clientset,
+	nodeID string,
+	namespace string,
+	vip string,
+) *NodeServer {
 	return &NodeServer{
 		coreClient: coreClient,
 		virtClient: virtClient,
@@ -48,9 +59,12 @@ func NewNodeServer(coreClient ctlv1.Interface, virtClient kubecli.KubevirtClient
 			[]csi.NodeServiceCapability_RPC_Type{
 				csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
 				csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
-			}),
+				csi.NodeServiceCapability_RPC_EXPAND_VOLUME, // added expansion capability
+			},
+		),
 		vip:             vip,
 		harvNetFSClient: harvNetFSClient,
+		harvClient:      harvClient,
 	}
 }
 
@@ -310,6 +324,15 @@ func (ns *NodeServer) nodePublishMountVolume(volumeName, devicePath, targetPath,
 	}
 	logrus.Debugf("NodePublishVolume: done MountVolume %s", volumeName)
 
+	// ---- NEW LOGIC FOR OFFLINE EXPANSION ----
+	// If the block device is bigger than the filesystem, grow the filesystem.
+	// The simplest approach is to always attempt a resize operation if you have
+	// a strong guess it's one of the supported file systems. For example:
+	if err := resizeFilesystem(devicePath, fsType, mounter); err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to resize filesystem for volume %s at %s: %v", volumeName, devicePath, err)
+	}
+	// ----------------------------------------
+
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
@@ -428,8 +451,89 @@ func (ns *NodeServer) NodeGetVolumeStats(_ context.Context, req *csi.NodeGetVolu
 	}, nil
 }
 
-func (ns *NodeServer) NodeExpandVolume(context.Context, *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+// Constants for repeated strings
+const (
+	fsTypeExt4           = "ext4"
+	fsTypeXFS            = "xfs"
+	resize2fsCmd         = "resize2fs"
+	xfsGrowfsCmd         = "xfs_growfs"
+	missingVolumeInfoErr = "Missing required volume information in request"
+	failedStatErr        = "failed to stat volume path"
+	failedMountCheckErr  = "failed to check mount point"
+	failedDevicePathErr  = "failed to get device path for volume"
+	failedResizeErr      = "failed to resize fs on volume"
+)
+
+func (ns *NodeServer) NodeExpandVolume(
+	ctx context.Context,
+	req *csi.NodeExpandVolumeRequest,
+) (*csi.NodeExpandVolumeResponse, error) {
+	// Validate request
+	if err := validateNodeExpandReq(req); err != nil {
+		return nil, err
+	}
+
+	if nodeExpandRWX(req) {
+		return nil, status.Errorf(codes.Internal, "rwx volume expansion is not supported")
+	}
+
+	_, err := ns.harvClient.HarvesterhciV1beta1().Settings().Get(ctx, csiOnlineExpandValidation, metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get online expansion validation: %v", err)
+	}
+
+	volumeID, volumePath := req.GetVolumeId(), req.GetVolumePath()
+	fi, err := os.Stat(volumePath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "%s %q: %v", failedStatErr, volumePath, err)
+	}
+	if !fi.IsDir() {
+		return &csi.NodeExpandVolumeResponse{CapacityBytes: req.GetCapacityRange().GetRequiredBytes()}, nil
+	}
+
+	if notMnt, err := isLikelyNotMountPointAttach(volumePath); err != nil {
+		return nil, status.Errorf(codes.Internal, "%s %q: %v", failedMountCheckErr, volumePath, err)
+	} else if notMnt {
+		return nil, status.Errorf(codes.FailedPrecondition, "volume %s is not mounted at %q", volumeID, volumePath)
+	}
+
+	devicePath, err := getDevicePathByVolumeID(volumeID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "%s %s: %v", failedDevicePathErr, volumeID, err)
+	}
+
+	fstype, err := getNodeFsType(req)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get filesystem type for volume %s: %v", volumeID, err)
+	}
+
+	mounter := &mount.SafeFormatAndMount{Interface: mount.New(""), Exec: exec.New()}
+	if err := resizeFilesystem(devicePath, fstype, mounter); err != nil {
+		return nil, status.Errorf(codes.Internal, "%s %s devPath %s: %v", failedResizeErr, volumeID, devicePath, err)
+	}
+
+	return &csi.NodeExpandVolumeResponse{CapacityBytes: req.GetCapacityRange().GetRequiredBytes()}, nil
+}
+
+func resizeFilesystem(targetPath, fsType string, mounter *mount.SafeFormatAndMount) error {
+	switch fsType {
+	case fsTypeExt4:
+		// Resize an ext4 filesystem. resize2fs will auto-detect the new size.
+		output, err := mounter.Exec.Command(resize2fsCmd, targetPath).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s failed: %v, output: %s", resize2fsCmd, err, string(output))
+		}
+	case fsTypeXFS:
+		// Resize an XFS filesystem.
+		output, err := mounter.Exec.Command(xfsGrowfsCmd, targetPath).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s failed: %v, output: %s", xfsGrowfsCmd, err, string(output))
+		}
+	default:
+		logrus.Warnf("Unsupported filesystem type: %s", fsType)
+		return fmt.Errorf("unsupported filesystem type: %s", fsType)
+	}
+	return nil
 }
 
 func (ns *NodeServer) NodeGetInfo(context.Context, *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
