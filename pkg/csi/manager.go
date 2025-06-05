@@ -15,6 +15,7 @@ import (
 	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
@@ -65,6 +66,13 @@ func (m *Manager) Run(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+
+	kubeClient, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		logrus.Errorf("Failed to create local kube client: %v", err)
+		return err
+	}
+
 	coreClient, err := core.NewFactoryFromConfig(restConfig)
 	if err != nil {
 		return err
@@ -138,6 +146,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 		storageClient.Storage().V1(),
 		virtClient,
 		lhclient,
+		kubeClient,
 		harvNetworkFSClient,
 		harvClient,
 		namespace,
