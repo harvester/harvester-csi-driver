@@ -2,13 +2,11 @@ package csi
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
-	lhv1beta2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	ctlv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	ctlstoragev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/storage/v1"
@@ -329,43 +327,8 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		return &csi.ControllerPublishVolumeResponse{}, nil
 	}
 
-	// For RWO volume, we need to ensure there is not other volumeattachment
-	clusterVAs, err := cs.localKubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to list Guest VolumeAttachments: %v", err)
-	}
-	volumeInUsedOnGuest := false
-	targetVAonGuest := ""
-	for _, va := range clusterVAs.Items {
-		if *va.Spec.Source.PersistentVolumeName == pvc.Name && va.Spec.NodeName != req.GetNodeId() {
-			logrus.Warnf("Volume %s is already attached to node %s, cannot attach to node %s", va.Spec.NodeName, req.GetNodeId(), pvc.Spec.VolumeName)
-			targetVAonGuest = va.Name
-			volumeInUsedOnGuest = true
-			break
-		}
-	}
-	// we have another chance to check host cluster va
-	// if the host cluster already detch this volume, we should do the cleanup on guest cluster
-	volumeInUsedOnHost := false
-	if !volumeInUsedOnGuest {
-		hostVAs, err := cs.kubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to list Host VolumeAttachments: %v, volume was in-used by other nodes", err)
-		}
-		for _, va := range hostVAs.Items {
-			if *va.Spec.Source.PersistentVolumeName == pvc.Spec.VolumeName {
-				volumeInUsedOnHost = true
-			}
-		}
-	}
-
-	// cleanup the orphan volume attachment on guest cluster
-	if volumeInUsedOnGuest && !volumeInUsedOnHost {
-		if err := cs.localKubeClient.StorageV1().VolumeAttachments().Delete(context.TODO(), targetVAonGuest, metav1.DeleteOptions{}); err != nil {
-			return nil, status.Errorf(codes.Internal, "Failed to delete orphan VolumeAttachment %s on guest cluster: %v", targetVAonGuest, err)
-		}
-		logrus.Infof("Trying to cleanup orphan VolumeAttachment %s on guest cluster", targetVAonGuest)
-		return nil, status.Errorf(codes.Aborted, "Waiting for the volumeattachment %s to be deleted on guest cluster, please retry later", targetVAonGuest)
+	if err := cs.validateVolumeAttachment(pvc, req.GetNodeId()); err != nil {
+		return nil, err
 	}
 
 	opts := &kubevirtv1.AddVolumeOptions{
@@ -400,6 +363,85 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 	}
 
 	return &csi.ControllerPublishVolumeResponse{}, nil
+}
+
+// validateVolumeAttachment helps to ensure the volumeattachment.
+// Input:
+// - pvc here is the host cluster pvc, means this pvc.name is the guest cluster pvc.spec.volumeName
+// - nodeID is the VM name, we could check if the filesystem volume because filesystem volume would not have the volumeattachment
+//
+// If no volumeattachment found, it will return nil.
+func (cs *ControllerServer) validateVolumeAttachment(pvc *corev1.PersistentVolumeClaim, nodeID string) error {
+	// For RWO volume, we need to ensure there is not other volumeattachment
+	clusterVAs, err := cs.localKubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to list Guest VolumeAttachments: %v", err)
+	}
+	volumeInUsedOnOtherGuestNode := false
+	targetVAonGuest := ""
+	for _, va := range clusterVAs.Items {
+		if *va.Spec.Source.PersistentVolumeName == pvc.Name && va.Spec.NodeName != nodeID {
+			logrus.Warnf("Volume %s is already attached to node %s, cannot attach to node %s", pvc.Spec.VolumeName, va.Spec.NodeName, nodeID)
+			targetVAonGuest = va.Name
+			volumeInUsedOnOtherGuestNode = true
+			break
+		}
+	}
+	// we have another chance to check host cluster va
+	// if the host cluster already detch this volume, we should do the cleanup on guest cluster
+	volumeInUsedOnHost := false
+	if !volumeInUsedOnOtherGuestNode {
+		hostVAs, err := cs.kubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to list Host VolumeAttachments: %v, volume was in-used by other nodes", err)
+		}
+		for _, va := range hostVAs.Items {
+			if *va.Spec.Source.PersistentVolumeName == pvc.Spec.VolumeName {
+				volumeInUsedOnHost = true
+				if volumeInUsedOnOtherGuestNode {
+					return status.Errorf(codes.Internal, "Volume %s is already attached to node %s, cannot attach to node %s", pvc.Spec.VolumeName, va.Spec.NodeName, nodeID)
+				}
+			}
+		}
+	}
+
+	// we need to directly check the VM device for the filesystem volume because the filesystem volume
+	// would not have the volumeattachment.
+	if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeFilesystem {
+		volumeInUsedOnHost = cs.checkVolumeInIuseByVM(pvc)
+		if volumeInUsedOnOtherGuestNode && volumeInUsedOnHost {
+			return status.Errorf(codes.Internal, "Volume %s is already attached to other node, cannot attach to node %s", pvc.Spec.VolumeName, nodeID)
+		}
+	}
+
+	// cleanup the orphan volume attachment on guest cluster
+	if volumeInUsedOnOtherGuestNode && !volumeInUsedOnHost {
+		if err := cs.localKubeClient.StorageV1().VolumeAttachments().Delete(context.TODO(), targetVAonGuest, metav1.DeleteOptions{}); err != nil {
+			return status.Errorf(codes.Internal, "Failed to delete orphan VolumeAttachment %s on guest cluster: %v", targetVAonGuest, err)
+		}
+		logrus.Infof("Trying to cleanup orphan VolumeAttachment %s on guest cluster", targetVAonGuest)
+		return status.Errorf(codes.Aborted, "Waiting for the volumeattachment %s to be deleted on guest cluster, please retry later", targetVAonGuest)
+	}
+	return nil
+}
+
+func (cs *ControllerServer) checkVolumeInIuseByVM(pvc *corev1.PersistentVolumeClaim) bool {
+	vmiList, err := cs.virtClient.VirtualMachineInstance(cs.namespace).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		// if we cannot list the VMI, we can assume the volume is in use, controller will retry later.
+		logrus.Errorf("Failed to list VMI: %v", err)
+		return true
+	}
+
+	for _, vmi := range vmiList.Items {
+		for _, volStatus := range vmi.Status.VolumeStatus {
+			if volStatus.Name == pvc.Name && volStatus.HotplugVolume != nil {
+				logrus.Infof("Volume %s is in use by VMI %s", pvc.Spec.VolumeName, vmi.Name)
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ControllerUnpublishVolume will detach the volume
@@ -757,19 +799,6 @@ func getVolumeCapabilityAccessModes(vc []csi.VolumeCapability_AccessMode_Mode) [
 	return vca
 }
 
-func volAttachedCorrectly(volume *lhv1beta2.Volume, nodeID string) bool {
-	virtWorkloads := getVirtLauncherWorkloadsFromLHVolume(volume)
-	logrus.Debugf("Volume %s state: %s, currentNodeID: %s, nodeID: %v, virtWorkloads: %v", volume.Name, volume.Status.State, volume.Status.CurrentNodeID, nodeID, virtWorkloads)
-	if volume.Status.State == lhv1beta2.VolumeStateAttached {
-		for _, workload := range virtWorkloads {
-			if strings.Contains(workload, nodeID) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (cs *ControllerServer) waitForLHVolumeName(pvcName string) bool {
 	timeoutTimer := time.NewTimer(timeoutAttachDetach)
 	defer timeoutTimer.Stop()
@@ -797,16 +826,6 @@ func (cs *ControllerServer) waitForLHVolumeName(pvcName string) bool {
 			return true
 		}
 	}
-}
-
-func getVirtLauncherWorkloadsFromLHVolume(volume *lhv1beta2.Volume) []string {
-	virtWorkloads := []string{}
-	for _, workload := range volume.Status.KubernetesStatus.WorkloadsStatus {
-		if strings.HasPrefix(workload.WorkloadName, "virt-launcher-") {
-			virtWorkloads = append(virtWorkloads, workload.WorkloadName)
-		}
-	}
-	return virtWorkloads
 }
 
 func isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
