@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +33,9 @@ const (
 	timeoutAttachDetach = 60 * time.Second
 	tickAttachDetach    = 2 * time.Second
 	paramHostSC         = "hostStorageClass"
+	paramHostVolMode    = "hostVolumeMode"
+	longhornProvisioner = "driver.longhorn.io"
+	annoFSVolumeForVM   = "harvesterhci.io/volumeForVirtualMachine"
 	LonghornNS          = "longhorn-system"
 	HarvesterNS         = "harvester-system"
 )
@@ -105,7 +109,7 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 	}
 }
 
-func (cs *ControllerServer) validStorageClass(storageClassName string) error {
+func (cs *ControllerServer) validStorageClass(storageClassName string) (*storagev1.StorageClass, error) {
 	logrus.Infof("Prepare to check the host StorageClass: %s", storageClassName)
 	sc, err := cs.storageClient.StorageClass().Get(storageClassName, metav1.GetOptions{})
 	if err != nil {
@@ -117,17 +121,17 @@ func (cs *ControllerServer) validStorageClass(storageClassName string) error {
 			 * from the host harvester cluster. We just skip checking on this situation
 			 */
 			logrus.Warnf("No permission, skip checking. err: %+v", err)
-			return nil
+			return nil, nil
 		case metav1.StatusReasonNotFound:
 			logrus.Errorf("The StorageClass %s does not exist.", storageClassName)
-			return status.Error(codes.NotFound, err.Error())
+			return nil, status.Error(codes.NotFound, err.Error())
 		default:
-			return status.Error(codes.Internal, err.Error())
+			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
 	logrus.Debugf("Get the `%s` StorageClass: %+v", storageClassName, sc)
 
-	return nil
+	return sc, nil
 }
 
 func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
@@ -653,11 +657,26 @@ func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []
 	}
 
 	volumeMode := cs.getVolumeMode(volCaps)
-	targetSC, err := cs.getStorageClass(volumeParameters)
+	targetSC, targetProvisioner, err := cs.getStorageClass(volumeParameters)
 	if err != nil {
 		logrus.Errorf("Failed to get the StorageClass: %v", err)
 		return nil, err
 	}
+	// if the paramHostVolMode is set, we should respect it
+	if val, exists := volumeParameters[paramHostVolMode]; exists {
+		if val == "filesystem" {
+			volumeMode = corev1.PersistentVolumeFilesystem
+		}
+	}
+
+	// set annotation if the volumeMode is filesystem and the target provisioner is not Longhorn
+	if volumeMode == corev1.PersistentVolumeFilesystem && targetProvisioner != longhornProvisioner {
+		if pvc.ObjectMeta.Annotations == nil {
+			pvc.ObjectMeta.Annotations = make(map[string]string)
+		}
+		pvc.ObjectMeta.Annotations[annoFSVolumeForVM] = "true"
+	}
+
 	// Round up to multiple of 2 * 1024 * 1024
 	volSizeBytes = utils.RoundUpSize(volSizeBytes)
 
@@ -686,7 +705,8 @@ func (cs *ControllerServer) getVolumeMode(volCaps []*csi.VolumeCapability) corev
 	return ""
 }
 
-func (cs *ControllerServer) getStorageClass(volParameters map[string]string) (string, error) {
+// getStorageClass returns sc name, provisioner (if permission is allowed) and error
+func (cs *ControllerServer) getStorageClass(volParameters map[string]string) (string, string, error) {
 	/*
 	 * Let's handle SC
 	 * SC define > controller define
@@ -696,14 +716,19 @@ func (cs *ControllerServer) getStorageClass(volParameters map[string]string) (st
 	 * 2. If guest cluster can list host cluster StorageClass, check it.
 	 */
 	targetSC := cs.hostStorageClass
+	targetProvisioner := ""
 	if val, exists := volParameters[paramHostSC]; exists {
 		//If StorageClass has `hostStorageClass` parameter, check whether it is valid or not.
-		if err := cs.validStorageClass(val); err != nil {
-			return "", err
+		sc, err := cs.validStorageClass(val)
+		if err != nil {
+			return "", "", err
+		}
+		if sc != nil {
+			targetProvisioner = sc.Provisioner
 		}
 		targetSC = val
 	}
-	return targetSC, nil
+	return targetSC, targetProvisioner, nil
 }
 
 func getControllerServiceCapabilities(cl []csi.ControllerServiceCapability_RPC_Type) []*csi.ControllerServiceCapability {
