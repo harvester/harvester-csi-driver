@@ -2,14 +2,11 @@ package csi
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
-	lhv1beta2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	ctlv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	ctlstoragev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/storage/v1"
@@ -17,10 +14,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
@@ -32,6 +31,9 @@ const (
 	timeoutAttachDetach = 60 * time.Second
 	tickAttachDetach    = 2 * time.Second
 	paramHostSC         = "hostStorageClass"
+	paramHostVolMode    = "hostVolumeMode"
+	longhornProvisioner = "driver.longhorn.io"
+	annoFSVolumeForVM   = "harvesterhci.io/volumeForVirtualMachine"
 	LonghornNS          = "longhorn-system"
 	HarvesterNS         = "harvester-system"
 )
@@ -41,6 +43,11 @@ type ControllerServer struct {
 	hostStorageClass    string
 	checkLHVolumeStatus bool
 
+	// local clients to operate the guest cluster resources
+	localKubeClient *kubernetes.Clientset
+
+	// these clients are used to access the host cluster resources
+	kubeClient      *kubernetes.Clientset
 	coreClient      ctlv1.Interface
 	storageClient   ctlstoragev1.Interface
 	virtClient      kubecli.KubevirtClient
@@ -51,7 +58,19 @@ type ControllerServer struct {
 	accessModes []*csi.VolumeCapability_AccessMode
 }
 
-func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, harvNetFSClient *harvnetworkfsset.Clientset, namespace string, hostStorageClass string) *ControllerServer {
+func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.Interface, virtClient kubecli.KubevirtClient, lhClient *lhclientset.Clientset, kubeClient *kubernetes.Clientset, harvNetFSClient *harvnetworkfsset.Clientset, namespace string, hostStorageClass string) *ControllerServer {
+	// generate the local kube client for guest cluster operations
+	localClientCfg, err := rest.InClusterConfig()
+	if err != nil {
+		logrus.Errorf("Failed to get in-cluster config: %v", err)
+		return nil
+	}
+	localKubeClient, err := kubernetes.NewForConfig(localClientCfg)
+	if err != nil {
+		logrus.Errorf("Failed to create local kube client: %v", err)
+		return nil
+	}
+
 	accessMode := []csi.VolumeCapability_AccessMode_Mode{
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 	}
@@ -68,12 +87,14 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 	}
 	return &ControllerServer{
 		namespace:           namespace,
+		localKubeClient:     localKubeClient,
 		hostStorageClass:    hostStorageClass,
 		checkLHVolumeStatus: checkLHVolumeStatus,
 		coreClient:          coreClient,
 		storageClient:       storageClient,
 		virtClient:          virtClient,
 		lhClient:            lhClient,
+		kubeClient:          kubeClient,
 		harvNetFSClient:     harvNetFSClient,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
@@ -86,7 +107,7 @@ func NewControllerServer(coreClient ctlv1.Interface, storageClient ctlstoragev1.
 	}
 }
 
-func (cs *ControllerServer) validStorageClass(storageClassName string) error {
+func (cs *ControllerServer) validStorageClass(storageClassName string) (*storagev1.StorageClass, error) {
 	logrus.Infof("Prepare to check the host StorageClass: %s", storageClassName)
 	sc, err := cs.storageClient.StorageClass().Get(storageClassName, metav1.GetOptions{})
 	if err != nil {
@@ -98,17 +119,17 @@ func (cs *ControllerServer) validStorageClass(storageClassName string) error {
 			 * from the host harvester cluster. We just skip checking on this situation
 			 */
 			logrus.Warnf("No permission, skip checking. err: %+v", err)
-			return nil
+			return nil, nil
 		case metav1.StatusReasonNotFound:
 			logrus.Errorf("The StorageClass %s does not exist.", storageClassName)
-			return status.Error(codes.NotFound, err.Error())
+			return nil, status.Error(codes.NotFound, err.Error())
 		default:
-			return status.Error(codes.Internal, err.Error())
+			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
 	logrus.Debugf("Get the `%s` StorageClass: %+v", storageClassName, sc)
 
-	return nil
+	return sc, nil
 }
 
 func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
@@ -162,6 +183,7 @@ func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolum
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	// TODO: we need generalize the RWX volume on next release
 	if isLHRWXVolume(resPVC) {
 		if !cs.waitForLHVolumeName(resPVC.Name) {
 			return nil, status.Errorf(codes.DeadlineExceeded, "Failed to create volume %s", resPVC.Name)
@@ -217,6 +239,7 @@ func (cs *ControllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
+	// TODO: we need generalize the RWX volume on next release
 	if isLHRWXVolume(resPVC) {
 		// do no-op if the networkfilesystem is already deleted
 		if _, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), resPVC.Spec.VolumeName, metav1.GetOptions{}); err != nil && !errors.IsNotFound(err) {
@@ -283,6 +306,8 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		return nil, status.Error(codes.InvalidArgument, "Missing volume capability in request")
 	}
 
+	// the pvc here is the host cluster pvc
+	// means this pvc.name is the guest cluster pvc.spec.volumeName
 	pvc, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", req.GetVolumeId(), err)
@@ -301,14 +326,9 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		logrus.Info("Do no-op for non-LH RWX volume")
 		return &csi.ControllerPublishVolumeResponse{}, nil
 	}
-	lhVolumeName := pvc.Spec.VolumeName
 
-	// we should wait for the volume to be detached from the previous node
-	// Wait until engine confirmed that rebuild started
-	if err := wait.PollUntilContextTimeout(context.Background(), tickAttachDetach, timeoutAttachDetach, true, func(context.Context) (bool, error) {
-		return waitForVolSettled(cs.lhClient, lhVolumeName, req.GetNodeId(), cs.checkLHVolumeStatus)
-	}); err != nil {
-		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to wait the volume %s status to settled", req.GetVolumeId())
+	if err := cs.validateVolumeAttachment(pvc, req.GetNodeId()); err != nil {
+		return nil, err
 	}
 
 	opts := &kubevirtv1.AddVolumeOptions{
@@ -345,6 +365,85 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 	return &csi.ControllerPublishVolumeResponse{}, nil
 }
 
+// validateVolumeAttachment helps to ensure the volumeattachment.
+// Input:
+// - pvc here is the host cluster pvc, means this pvc.name is the guest cluster pvc.spec.volumeName
+// - nodeID is the VM name, we could check if the filesystem volume because filesystem volume would not have the volumeattachment
+//
+// If no volumeattachment found, it will return nil.
+func (cs *ControllerServer) validateVolumeAttachment(pvc *corev1.PersistentVolumeClaim, nodeID string) error {
+	// For RWO volume, we need to ensure there is not other volumeattachment
+	clusterVAs, err := cs.localKubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to list Guest VolumeAttachments: %v", err)
+	}
+	volumeInUsedOnOtherGuestNode := false
+	targetVAonGuest := ""
+	for _, va := range clusterVAs.Items {
+		if *va.Spec.Source.PersistentVolumeName == pvc.Name && va.Spec.NodeName != nodeID {
+			logrus.Warnf("Volume %s is already attached to node %s, cannot attach to node %s", pvc.Spec.VolumeName, va.Spec.NodeName, nodeID)
+			targetVAonGuest = va.Name
+			volumeInUsedOnOtherGuestNode = true
+			break
+		}
+	}
+	// we have another chance to check host cluster va
+	// if the host cluster already detch this volume, we should do the cleanup on guest cluster
+	volumeInUsedOnHost := false
+	if !volumeInUsedOnOtherGuestNode {
+		hostVAs, err := cs.kubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to list Host VolumeAttachments: %v, volume was in-used by other nodes", err)
+		}
+		for _, va := range hostVAs.Items {
+			if *va.Spec.Source.PersistentVolumeName == pvc.Spec.VolumeName {
+				volumeInUsedOnHost = true
+				if volumeInUsedOnOtherGuestNode {
+					return status.Errorf(codes.Internal, "Volume %s is already attached to node %s, cannot attach to node %s", pvc.Spec.VolumeName, va.Spec.NodeName, nodeID)
+				}
+			}
+		}
+	}
+
+	// we need to directly check the VM device for the filesystem volume because the filesystem volume
+	// would not have the volumeattachment.
+	if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeFilesystem {
+		volumeInUsedOnHost = cs.checkVolumeInUseByVM(pvc)
+		if volumeInUsedOnOtherGuestNode && volumeInUsedOnHost {
+			return status.Errorf(codes.Internal, "Volume %s is already attached to other node, cannot attach to node %s", pvc.Spec.VolumeName, nodeID)
+		}
+	}
+
+	// cleanup the orphan volume attachment on guest cluster
+	if volumeInUsedOnOtherGuestNode && !volumeInUsedOnHost {
+		if err := cs.localKubeClient.StorageV1().VolumeAttachments().Delete(context.TODO(), targetVAonGuest, metav1.DeleteOptions{}); err != nil {
+			return status.Errorf(codes.Internal, "Failed to delete orphan VolumeAttachment %s on guest cluster: %v", targetVAonGuest, err)
+		}
+		logrus.Infof("Trying to cleanup orphan VolumeAttachment %s on guest cluster", targetVAonGuest)
+		return status.Errorf(codes.Aborted, "Waiting for the volumeattachment %s to be deleted on guest cluster, please retry later", targetVAonGuest)
+	}
+	return nil
+}
+
+func (cs *ControllerServer) checkVolumeInUseByVM(pvc *corev1.PersistentVolumeClaim) bool {
+	vmiList, err := cs.virtClient.VirtualMachineInstance(cs.namespace).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		// if we cannot list the VMI, we can assume the volume is in use, controller will retry later.
+		logrus.Errorf("Failed to list VMI: %v", err)
+		return true
+	}
+
+	for _, vmi := range vmiList.Items {
+		for _, volStatus := range vmi.Status.VolumeStatus {
+			if volStatus.Name == pvc.Name && volStatus.HotplugVolume != nil {
+				logrus.Infof("Volume %s is in use by VMI %s", pvc.Spec.VolumeName, vmi.Name)
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ControllerUnpublishVolume will detach the volume
 func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	logrus.Infof("ControllerServer ControllerUnpublishVolume req: %v", req)
@@ -363,9 +462,11 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 			req.GetVolumeId(), pvc.Status.Phase)
 	}
 
+	// TODO: we need generalize the RWX volume on next release
 	if isLHRWXVolume(pvc) {
 		return cs.unpublishRWXVolume(pvc)
 	}
+
 	volumeHotplugged := false
 	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), req.GetNodeId(), metav1.GetOptions{})
 	if err != nil {
@@ -598,11 +699,26 @@ func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []
 	}
 
 	volumeMode := cs.getVolumeMode(volCaps)
-	targetSC, err := cs.getStorageClass(volumeParameters)
+	targetSC, targetProvisioner, err := cs.getStorageClass(volumeParameters)
 	if err != nil {
 		logrus.Errorf("Failed to get the StorageClass: %v", err)
 		return nil, err
 	}
+	// if the paramHostVolMode is set, we should respect it
+	if val, exists := volumeParameters[paramHostVolMode]; exists {
+		if val == "filesystem" {
+			volumeMode = corev1.PersistentVolumeFilesystem
+		}
+	}
+
+	// set annotation if the volumeMode is filesystem and the target provisioner is not Longhorn
+	if volumeMode == corev1.PersistentVolumeFilesystem && targetProvisioner != longhornProvisioner {
+		if pvc.ObjectMeta.Annotations == nil {
+			pvc.ObjectMeta.Annotations = make(map[string]string)
+		}
+		pvc.ObjectMeta.Annotations[annoFSVolumeForVM] = "true"
+	}
+
 	// Round up to multiple of 2 * 1024 * 1024
 	volSizeBytes = utils.RoundUpSize(volSizeBytes)
 
@@ -631,7 +747,8 @@ func (cs *ControllerServer) getVolumeMode(volCaps []*csi.VolumeCapability) corev
 	return ""
 }
 
-func (cs *ControllerServer) getStorageClass(volParameters map[string]string) (string, error) {
+// getStorageClass returns sc name, provisioner (if permission is allowed) and error
+func (cs *ControllerServer) getStorageClass(volParameters map[string]string) (string, string, error) {
 	/*
 	 * Let's handle SC
 	 * SC define > controller define
@@ -641,14 +758,19 @@ func (cs *ControllerServer) getStorageClass(volParameters map[string]string) (st
 	 * 2. If guest cluster can list host cluster StorageClass, check it.
 	 */
 	targetSC := cs.hostStorageClass
+	targetProvisioner := ""
 	if val, exists := volParameters[paramHostSC]; exists {
 		//If StorageClass has `hostStorageClass` parameter, check whether it is valid or not.
-		if err := cs.validStorageClass(val); err != nil {
-			return "", err
+		sc, err := cs.validStorageClass(val)
+		if err != nil {
+			return "", "", err
+		}
+		if sc != nil {
+			targetProvisioner = sc.Provisioner
 		}
 		targetSC = val
 	}
-	return targetSC, nil
+	return targetSC, targetProvisioner, nil
 }
 
 func getControllerServiceCapabilities(cl []csi.ControllerServiceCapability_RPC_Type) []*csi.ControllerServiceCapability {
@@ -675,38 +797,6 @@ func getVolumeCapabilityAccessModes(vc []csi.VolumeCapability_AccessMode_Mode) [
 		vca = append(vca, &csi.VolumeCapability_AccessMode{Mode: c})
 	}
 	return vca
-}
-
-func waitForVolSettled(lhClient *lhclientset.Clientset, lhVolName, nodeID string, checkLHVolumeStatus bool) (bool, error) {
-	if !checkLHVolumeStatus {
-		return true, nil
-	}
-	volume, err := lhClient.LonghornV1beta2().Volumes(LonghornNS).Get(context.TODO(), lhVolName, metav1.GetOptions{})
-	if err != nil {
-		logrus.Warnf("waitForVolumeSettled: error while waiting for volume %s to be settled. Err: %v", lhVolName, err)
-		return false, err
-	}
-	// check attached correctly
-	if volAttachedCorrectly(volume, nodeID) {
-		return true, nil
-	}
-	if volume.Status.State == lhv1beta2.VolumeStateDetached {
-		return true, nil
-	}
-	return false, fmt.Errorf("volume Status (not correctly): %s, CurrentNodeID: %s, ExpectedNodeID: %s", volume.Status.State, volume.Status.CurrentNodeID, nodeID)
-}
-
-func volAttachedCorrectly(volume *lhv1beta2.Volume, nodeID string) bool {
-	virtWorkloads := getVirtLauncherWorkloadsFromLHVolume(volume)
-	logrus.Debugf("Volume %s state: %s, currentNodeID: %s, nodeID: %v, virtWorkloads: %v", volume.Name, volume.Status.State, volume.Status.CurrentNodeID, nodeID, virtWorkloads)
-	if volume.Status.State == lhv1beta2.VolumeStateAttached {
-		for _, workload := range virtWorkloads {
-			if strings.Contains(workload, nodeID) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (cs *ControllerServer) waitForLHVolumeName(pvcName string) bool {
@@ -736,16 +826,6 @@ func (cs *ControllerServer) waitForLHVolumeName(pvcName string) bool {
 			return true
 		}
 	}
-}
-
-func getVirtLauncherWorkloadsFromLHVolume(volume *lhv1beta2.Volume) []string {
-	virtWorkloads := []string{}
-	for _, workload := range volume.Status.KubernetesStatus.WorkloadsStatus {
-		if strings.HasPrefix(workload.WorkloadName, "virt-launcher-") {
-			virtWorkloads = append(virtWorkloads, workload.WorkloadName)
-		}
-	}
-	return virtWorkloads
 }
 
 func isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
