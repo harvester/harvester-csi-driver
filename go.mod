@@ -105,6 +105,7 @@ require (
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/kube-logging/logging-operator/pkg/sdk v0.11.1-0.20240314152935-421fefebc813 // indirect
 	github.com/kubernetes-csi/external-snapshotter/client/v4 v4.2.0 // indirect
+	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.2.0
 	github.com/longhorn/backupstore v0.0.0-20250227220202-651bd33886fe // indirect
 	github.com/longhorn/go-common-libs v0.0.0-20250215052214-151615b29f8e // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect

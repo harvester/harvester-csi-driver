@@ -2,20 +2,25 @@ package csi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
+	"github.com/harvester/harvester/pkg/settings"
 	"github.com/harvester/harvester/pkg/util"
 	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	snapclient "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	ctlv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	ctlstoragev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/storage/v1"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -31,14 +36,19 @@ import (
 )
 
 const (
-	genericTimeout      = 60 * time.Second
-	genericTickTime     = 2 * time.Second
-	paramHostSC         = "hostStorageClass"
-	paramHostVolMode    = "hostVolumeMode"
-	longhornProvisioner = "driver.longhorn.io"
-	annoFSVolumeForVM   = "harvesterhci.io/volumeForVirtualMachine"
-	LonghornNS          = "longhorn-system"
-	HarvesterNS         = "harvester-system"
+	genericTimeout          = 60 * time.Second
+	genericTickTime         = 2 * time.Second
+	snapReadyTimeout        = 90 * time.Second // Longer timeout for snapshot operations
+	paramHostSC             = "hostStorageClass"
+	paramHostVolMode        = "hostVolumeMode"
+	longhornProvisioner     = "driver.longhorn.io"
+	annoFSVolumeForVM       = "harvesterhci.io/volumeForVirtualMachine"
+	labelSnapHostSC         = "harvesterhci.io/snapHostSC"
+	labelSnapHostStorage    = "harvesterhci.io/snapHostStorage"
+	labelSnapHostVolumeMode = "harvesterhci.io/snapHostVolumeMode"
+	LonghornNS              = "longhorn-system"
+	HarvesterNS             = "harvester-system"
+	VolumeSnapshotKind      = "VolumeSnapshot"
 )
 
 type ControllerServer struct {
@@ -58,6 +68,7 @@ type ControllerServer struct {
 	lhClient        *lhclientset.Clientset
 	harvNetFSClient *harvnetworkfsset.Clientset
 	harvClient      *harvclient.Clientset
+	snapClient      *snapclient.Clientset
 
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
@@ -73,6 +84,7 @@ func NewControllerServer(
 	kubeClient *kubernetes.Clientset,
 	harvNetFSClient *harvnetworkfsset.Clientset,
 	harvClient *harvclient.Clientset,
+	snapClient *snapclient.Clientset,
 	pods ctlv1.PodCache,
 	namespace string,
 	hostStorageClass string,
@@ -100,6 +112,7 @@ func NewControllerServer(
 		kubeClient:       kubeClient,
 		harvNetFSClient:  harvNetFSClient,
 		harvClient:       harvClient,
+		snapClient:       snapClient,
 		pods:             pods,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
@@ -107,9 +120,38 @@ func NewControllerServer(
 				csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 				csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
+				csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
 			}),
 		accessModes: getVolumeCapabilityAccessModes(accessMode),
 	}
+}
+
+func (cs *ControllerServer) getHostSnap(ctx context.Context, hostSnap string) (*snapshotv1.VolumeSnapshot, error) {
+	return cs.snapClient.SnapshotV1().VolumeSnapshots(cs.namespace).Get(ctx, hostSnap, metav1.GetOptions{})
+}
+
+func (cs *ControllerServer) createHostSnap(ctx context.Context, hostSnap *snapshotv1.VolumeSnapshot) (*snapshotv1.VolumeSnapshot, error) {
+	return cs.snapClient.SnapshotV1().VolumeSnapshots(cs.namespace).Create(ctx, hostSnap, metav1.CreateOptions{})
+}
+
+func (cs *ControllerServer) listHostSnaps(ctx context.Context, lo metav1.ListOptions) (*snapshotv1.VolumeSnapshotList, error) {
+	return cs.snapClient.SnapshotV1().VolumeSnapshots(cs.namespace).List(ctx, lo)
+}
+
+func (cs *ControllerServer) deleteHostSnap(ctx context.Context, hostSnap *snapshotv1.VolumeSnapshot) error {
+	return cs.snapClient.SnapshotV1().VolumeSnapshots(cs.namespace).Delete(ctx, hostSnap.Name, metav1.DeleteOptions{})
+}
+
+func (cs *ControllerServer) getHostSC(sc string) (*storagev1.StorageClass, error) {
+	return cs.storageClient.StorageClass().Get(sc, metav1.GetOptions{})
+}
+
+func (cs *ControllerServer) getHostPVC(vol string) (*corev1.PersistentVolumeClaim, error) {
+	return cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, vol, metav1.GetOptions{})
+}
+
+func (cs *ControllerServer) createHostPVC(hostPVC *corev1.PersistentVolumeClaim) (*corev1.PersistentVolumeClaim, error) {
+	return cs.coreClient.PersistentVolumeClaim().Create(hostPVC)
 }
 
 func (cs *ControllerServer) validStorageClass(storageClassName string) (*storagev1.StorageClass, error) {
@@ -137,34 +179,48 @@ func (cs *ControllerServer) validStorageClass(storageClassName string) (*storage
 	return sc, nil
 }
 
-func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
-	logrus.Infof("ControllerServer create volume req: %v", req)
+func (cs *ControllerServer) validateVolumeContentSource(ctx context.Context, vcs *csi.VolumeContentSource) error {
+	if vcs == nil {
+		return nil
+	}
 
+	if vcs.GetVolume() != nil {
+		return status.Error(codes.InvalidArgument, "Volume cloning from another volume is not supported,")
+	}
+
+	snap := vcs.GetSnapshot()
+	if snap == nil {
+		return nil
+	}
+
+	if snap.GetSnapshotId() == "" {
+		return status.Error(codes.InvalidArgument, "Snapshot source is specified but SnapshotId is empty")
+	}
+
+	return nil
+}
+
+func (cs *ControllerServer) validateCreateVolReq(ctx context.Context, req *csi.CreateVolumeRequest) (map[string]string, int64, error) {
 	if err := cs.validateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
-		logrus.Errorf("CreateVolume: invalid create volume req: %v", req)
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, 0, status.Errorf(codes.InvalidArgument, "invalid create volume req: %v", err)
 	}
 
-	// Check request parameters like Name and Volume Capabilities
 	if len(req.GetName()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Volume Name cannot be empty")
-	}
-	volumeCaps := req.GetVolumeCapabilities()
-	logrus.Debugf("Getting volumeCapabilities: %+v", volumeCaps)
-	if err := cs.validateVolumeCapabilities(volumeCaps); err != nil {
-		return nil, err
+		return nil, 0, status.Error(codes.InvalidArgument, "Volume Name cannot be empty")
 	}
 
-	// Parameter handling
+	if err := cs.validateVolumeCapabilities(req.GetVolumeCapabilities()); err != nil {
+		return nil, 0, err
+	}
+
+	// Validate VolumeContentSource
+	if err := cs.validateVolumeContentSource(ctx, req.GetVolumeContentSource()); err != nil {
+		return nil, 0, err
+	}
+
 	volumeParameters := req.GetParameters()
-	logrus.Debugf("Getting volumeParameters: %+v", volumeParameters)
 	if volumeParameters == nil {
 		volumeParameters = map[string]string{}
-	}
-
-	// snapshot restoring and volume cloning unimplemented
-	if req.VolumeContentSource != nil {
-		return nil, status.Error(codes.Unimplemented, "")
 	}
 
 	volSizeBytes := int64(utils.MinimalVolumeSize)
@@ -172,29 +228,122 @@ func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolum
 		volSizeBytes = req.GetCapacityRange().GetRequiredBytes()
 	}
 	if volSizeBytes < utils.MinimalVolumeSize {
-		logrus.Warnf("Request volume %v size %v is smaller than minimal size %v, set it to minimal size.", req.Name, volSizeBytes, utils.MinimalVolumeSize)
+		logrus.Warnf("Volume %s size %d below minimum %d, adjusting", req.Name, volSizeBytes, utils.MinimalVolumeSize)
 		volSizeBytes = utils.MinimalVolumeSize
 	}
 
-	// Create a PVC from the host cluster
-	pvc, err := cs.generateHostClusterPVCFormat(req.Name, volumeCaps, volumeParameters, volSizeBytes)
+	return volumeParameters, volSizeBytes, nil
+}
+
+func (cs *ControllerServer) buildHostPVCFromSnap(ctx context.Context, name string, vcs *csi.VolumeContentSource, size int64) (*corev1.PersistentVolumeClaim, error) {
+	hostSnap, err := cs.getHostSnap(ctx, vcs.GetSnapshot().GetSnapshotId())
 	if err != nil {
 		return nil, err
 	}
-	logrus.Debugf("The PVC content wanted is: %+v", pvc)
 
-	resPVC, err := cs.coreClient.PersistentVolumeClaim().Create(pvc)
+	// Validate that the snapshot used as volume content source has required labels
+	if err := cs.validateHostSnapLabels(hostSnap); err != nil {
+		return nil, err
+	}
+
+	// Extract information from snapshot labels
+	storageClassName := hostSnap.Labels[labelSnapHostSC]
+	storageCapacity := hostSnap.Labels[labelSnapHostStorage]
+	volumeModeStr := hostSnap.Labels[labelSnapHostVolumeMode]
+
+	if _, err := cs.getHostSC(storageClassName); err != nil {
+		return nil, err
+	}
+
+	// Parse storage capacity
+	storageQuantity, err := resource.ParseQuantity(storageCapacity)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate that the requested size is consistent with the snapshot storage capacity
+	snapshotSizeBytes := storageQuantity.Value()
+	if size > snapshotSizeBytes {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"Requested size %d bytes exceeds snapshot storage capacity %d bytes", size, snapshotSizeBytes)
+	}
+
+	// Parse volume mode
+	var volumeMode corev1.PersistentVolumeMode
+	switch volumeModeStr {
+	case string(corev1.PersistentVolumeBlock):
+		volumeMode = corev1.PersistentVolumeBlock
+	case string(corev1.PersistentVolumeFilesystem):
+		volumeMode = corev1.PersistentVolumeFilesystem
+	default:
+		return nil, status.Errorf(codes.Internal, "Invalid volume mode %s in snapshot labels", volumeModeStr)
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: cs.namespace,
+			Name:      name,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			VolumeMode:       &volumeMode,
+			StorageClassName: ptr.To(storageClassName),
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: storageQuantity,
+				},
+			},
+			DataSource: &corev1.TypedLocalObjectReference{
+				APIGroup: ptr.To(snapshotv1.GroupName),
+				Kind:     VolumeSnapshotKind,
+				Name:     hostSnap.Name,
+			},
+		},
+	}
+
+	return pvc, nil
+}
+
+func (cs *ControllerServer) buildHostPVC(ctx context.Context, req *csi.CreateVolumeRequest, vp map[string]string, size int64) (*corev1.PersistentVolumeClaim, error) {
+	if req.GetVolumeContentSource() == nil {
+		return cs.buildHostPVCFromScratch(req.Name, req.GetVolumeCapabilities(), vp, size)
+	}
+
+	if req.GetVolumeContentSource().GetSnapshot() != nil {
+		return cs.buildHostPVCFromSnap(ctx, req.Name, req.GetVolumeContentSource(), size)
+	}
+
+	return nil, status.Error(codes.InvalidArgument, "Only snapshot content source is supported for now")
+}
+
+func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	logrus.Infof("ControllerServer create volume req: %v", req)
+
+	// Validate request and get processed parameters
+	volumeParameters, volSizeBytes, err := cs.validateCreateVolReq(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a PVC from the host cluster
+	hotsPVC, err := cs.buildHostPVC(ctx, req, volumeParameters, volSizeBytes)
+	if err != nil {
+		return nil, err
+	}
+	logrus.Infof("The build host PVC %s/%s", hotsPVC.Namespace, hotsPVC.Name)
+
+	resHostPVC, err := cs.createHostPVC(hotsPVC)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	// TODO: we need generalize the RWX volume on next release
-	if isLHRWXVolume(resPVC) {
-		if !cs.waitForLHVolumeName(resPVC.Name) {
-			return nil, status.Errorf(codes.DeadlineExceeded, "Failed to create volume %s", resPVC.Name)
+	if isLHRWXVolume(resHostPVC) {
+		if !cs.waitForLHVolumeName(resHostPVC.Name) {
+			return nil, status.Errorf(codes.DeadlineExceeded, "Failed to create volume %s", resHostPVC.Name)
 		}
 
-		resPVC, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, resPVC.Name, metav1.GetOptions{})
+		resPVC, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, resHostPVC.Name, metav1.GetOptions{})
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", resPVC.Name, err)
 		}
@@ -218,7 +367,7 @@ func (cs *ControllerServer) CreateVolume(_ context.Context, req *csi.CreateVolum
 
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
-			VolumeId:      resPVC.Name,
+			VolumeId:      resHostPVC.Name,
 			CapacityBytes: volSizeBytes,
 			VolumeContext: volumeParameters,
 			ContentSource: req.VolumeContentSource,
@@ -493,16 +642,433 @@ func (cs *ControllerServer) GetCapacity(context.Context, *csi.GetCapacityRequest
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (cs *ControllerServer) CreateSnapshot(context.Context, *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+func (cs *ControllerServer) getHostSnapClass(hostPVC *corev1.PersistentVolumeClaim) (string, error) {
+	// Fetch csi driver configuration
+	config := map[string]settings.CSIDriverInfo{}
+	if err := json.Unmarshal([]byte(settings.CSIDriverConfig.GetDefault()), &config); err != nil {
+		return "", fmt.Errorf("unmarshal failed, error: %w, value: %s", err, settings.CSIDriverConfig.GetDefault())
+	}
+
+	provisioner := hostPVC.Annotations[utils.AnnStorageProvisioner]
+	if info, found := config[provisioner]; found && info.VolumeSnapshotClassName != "" {
+		return info.VolumeSnapshotClassName, nil
+	}
+
+	config = map[string]settings.CSIDriverInfo{}
+	if err := json.Unmarshal([]byte(settings.CSIDriverConfig.Get()), &config); err != nil {
+		return "", fmt.Errorf("unmarshal failed, error: %w, value: %s", err, settings.CSIDriverConfig.Get())
+	}
+
+	if info, found := config[provisioner]; found && info.VolumeSnapshotClassName != "" {
+		return info.VolumeSnapshotClassName, nil
+	}
+
+	return "", fmt.Errorf("no VolumeSnapshotClassName found for provisioner %s", provisioner)
 }
 
-func (cs *ControllerServer) DeleteSnapshot(context.Context, *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+func (cs *ControllerServer) generateHostSnapManifest(name, hostSnapClass string, hostPVC *corev1.PersistentVolumeClaim) (*snapshotv1.VolumeSnapshot, error) {
+	if hostPVC == nil || hostPVC.Spec.StorageClassName == nil {
+		return nil, fmt.Errorf("host PVC is nil or does not have a StorageClassName")
+	}
+
+	// Prepare labels with hostPVC information
+	labels := map[string]string{
+		labelSnapHostSC: *hostPVC.Spec.StorageClassName,
+	}
+
+	// Add storage capacity label
+	if storage := hostPVC.Spec.Resources.Requests.Storage(); storage != nil {
+		labels[labelSnapHostStorage] = storage.String()
+	}
+
+	// Add volume mode label
+	volumeMode := corev1.PersistentVolumeBlock
+	if hostPVC.Spec.VolumeMode != nil {
+		volumeMode = *hostPVC.Spec.VolumeMode
+	}
+	labels[labelSnapHostVolumeMode] = string(volumeMode)
+
+	hostSnapshot := &snapshotv1.VolumeSnapshot{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: cs.namespace,
+			Labels:    labels,
+		},
+		Spec: snapshotv1.VolumeSnapshotSpec{
+			Source: snapshotv1.VolumeSnapshotSource{
+				PersistentVolumeClaimName: ptr.To(hostPVC.Name),
+			},
+			VolumeSnapshotClassName: ptr.To(hostSnapClass),
+		},
+	}
+
+	return hostSnapshot, nil
 }
 
-func (cs *ControllerServer) ListSnapshots(context.Context, *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+// convertVolumeSnapshotToCSI converts a VolumeSnapshot to a CSI Snapshot
+func (cs *ControllerServer) convertVolumeSnapshotToCSI(hostSnap *snapshotv1.VolumeSnapshot, vol string) (*csi.Snapshot, error) {
+	if hostSnap == nil {
+		return nil, fmt.Errorf("snapshot cannot be nil")
+	}
+
+	if hostSnap.Name == "" {
+		return nil, fmt.Errorf("snapshot name cannot be empty")
+	}
+
+	if vol == "" {
+		return nil, fmt.Errorf("source volume ID cannot be empty")
+	}
+
+	var creationTime *timestamppb.Timestamp
+	if hostSnap.Status.CreationTime != nil {
+		creationTime = timestamppb.New(hostSnap.Status.CreationTime.Time)
+	}
+
+	var sizeBytes int64
+	if hostSnap.Status.RestoreSize != nil {
+		sizeBytes = hostSnap.Status.RestoreSize.Value()
+	}
+
+	var readyToUse bool
+	if hostSnap.Status.ReadyToUse != nil {
+		readyToUse = *hostSnap.Status.ReadyToUse
+	}
+
+	return &csi.Snapshot{
+		SnapshotId:     hostSnap.Name,
+		SourceVolumeId: vol,
+		SizeBytes:      sizeBytes,
+		CreationTime:   creationTime,
+		ReadyToUse:     readyToUse,
+	}, nil
+}
+
+func (cs *ControllerServer) checkSnapsReadiness(ctx context.Context, hostSnap string) bool {
+	currentHostSnap, err := cs.getHostSnap(ctx, hostSnap)
+	if err != nil {
+		logrus.Infof("Error retrieving snapshot %s: %v", hostSnap, err)
+		return false // continue waiting
+	}
+
+	if currentHostSnap.Status == nil {
+		return false // continue waiting
+	}
+
+	if currentHostSnap.Status.Error != nil {
+		logrus.Infof("host snapshot %s with error: %s", currentHostSnap.Name, *currentHostSnap.Status.Error.Message)
+		return false // stop waiting, error occurred
+	}
+
+	if currentHostSnap.Status.ReadyToUse != nil && *currentHostSnap.Status.ReadyToUse {
+		logrus.Infof("host snapshot %s is ready with size %v", currentHostSnap.Name, currentHostSnap.Status.RestoreSize.Value())
+		return true // stop waiting, ready
+	}
+
+	return false // continue waiting
+}
+
+func (cs *ControllerServer) waitForHostSnapReady(ctx context.Context, hostSnap string) bool {
+	logrus.Infof("Waiting for snapshot %s to become ready (timeout: %v)", hostSnap, snapReadyTimeout)
+
+	timer := time.NewTimer(snapReadyTimeout)
+	defer timer.Stop()
+	timeout := timer.C
+
+	ticker := time.NewTicker(genericTickTime)
+	defer ticker.Stop()
+	tick := ticker.C
+
+	for {
+		select {
+		case <-timeout:
+			logrus.Infof("Timeout waiting for snapshot %s to become ready", hostSnap)
+			return false
+		case <-tick:
+			if ready := cs.checkSnapsReadiness(ctx, hostSnap); ready {
+				return ready
+			}
+		}
+	}
+}
+
+// prepareSnapshotResponse waits for snapshot readiness and converts to CSI format
+func (cs *ControllerServer) prepareSnapshotResponse(ctx context.Context, hostSnap, vol string) (*csi.CreateSnapshotResponse, error) {
+	// Wait for snapshot to be ready
+	if !cs.waitForHostSnapReady(ctx, hostSnap) {
+		return nil, status.Errorf(codes.DeadlineExceeded, "host snap %s not become ready within %v", hostSnap, snapReadyTimeout)
+	}
+
+	// Get the updated snapshot with ready status
+	readyHostSnap, err := cs.getHostSnap(ctx, hostSnap)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate that the ready snapshot has required labels
+	if err := cs.validateHostSnapLabels(readyHostSnap); err != nil {
+		return nil, err
+	}
+
+	csiSnapshot, err := cs.convertVolumeSnapshotToCSI(readyHostSnap, vol)
+	if err != nil {
+		return nil, err
+	}
+
+	return &csi.CreateSnapshotResponse{
+		Snapshot: csiSnapshot,
+	}, nil
+}
+
+// validateCreateSnapshotRequest validates the CreateSnapshotRequest
+func validateCreateSnapshotRequest(req *csi.CreateSnapshotRequest) error {
+	if req.GetName() == "" {
+		return status.Error(codes.InvalidArgument, "Snapshot name cannot be empty")
+	}
+	if req.GetSourceVolumeId() == "" {
+		return status.Error(codes.InvalidArgument, "Source volume ID cannot be empty")
+	}
+	return nil
+}
+
+func (cs *ControllerServer) handleExistingSnap(ctx context.Context, name, vol string) (*csi.CreateSnapshotResponse, error) {
+	existingHostSnap, err := cs.getHostSnap(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	logrus.Infof("host Snapshot %s already exists, returning existing snapshot", existingHostSnap.Name)
+
+	// Validate that the existing snapshot has required labels
+	if err := cs.validateHostSnapLabels(existingHostSnap); err != nil {
+		return nil, err
+	}
+
+	return cs.prepareSnapshotResponse(ctx, existingHostSnap.Name, vol)
+}
+
+func (cs *ControllerServer) createSnapFromVolume(ctx context.Context, name, vol string) (*csi.CreateSnapshotResponse, error) {
+	logrus.Infof("Creating host snapshot %s from volume %s", name, vol)
+
+	// Get and validate host PVC
+	hostPVC, err := cs.getHostPVC(vol)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create the host snapshot
+	createdHostSnap, err := cs.generateHostSnap(ctx, name, hostPVC)
+	if err != nil {
+		return nil, err
+	}
+	logrus.Infof("host VolumeSnapshot %s created successfully, waiting for ready state", createdHostSnap.Name)
+
+	// Prepare and return response
+	response, err := cs.prepareSnapshotResponse(ctx, createdHostSnap.Name, vol)
+	if err != nil {
+		return nil, err
+	}
+
+	logrus.Infof("Successfully created and prepared snapshot %s (size: %d bytes, ready: %t)",
+		response.Snapshot.SnapshotId, response.Snapshot.SizeBytes, response.Snapshot.ReadyToUse)
+
+	return response, nil
+}
+
+// createHostSnapshot creates a new host snapshot from the given PVC
+func (cs *ControllerServer) generateHostSnap(ctx context.Context, name string, hostPVC *corev1.PersistentVolumeClaim) (*snapshotv1.VolumeSnapshot, error) {
+	// Get host volume snapshot class
+	hostSnapClass, err := cs.getHostSnapClass(hostPVC)
+	if err != nil {
+		return nil, err
+	}
+	logrus.Infof("Using VolumeSnapshotClass: %s for host snapshot %s", hostSnapClass, name)
+
+	// Generate snapshot specification
+	hostSnap, err := cs.generateHostSnapManifest(name, hostSnapClass, hostPVC)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create the snapshot using the factored-out helper method
+	return cs.createHostSnap(ctx, hostSnap)
+}
+
+func (cs *ControllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+	logrus.Infof("CreateSnapshot req: %v", req)
+
+	// Validate request
+	if err := validateCreateSnapshotRequest(req); err != nil {
+		return nil, err
+	}
+
+	// Check if host snapshot already exists
+	response, err := cs.handleExistingSnap(ctx, req.GetName(), req.GetSourceVolumeId())
+	if err == nil {
+		return response, nil
+	}
+	if !errors.IsNotFound(err) {
+		return nil, err
+	}
+
+	// Create new host snapshot from PVC
+	return cs.createSnapFromVolume(ctx, req.GetName(), req.GetSourceVolumeId())
+}
+
+// validateDeleteSnapshotRequest validates the DeleteSnapshotRequest
+func validateDeleteSnapshotRequest(req *csi.DeleteSnapshotRequest) error {
+	if req.GetSnapshotId() == "" {
+		return status.Error(codes.InvalidArgument, "Snapshot ID cannot be empty")
+	}
+	return nil
+}
+
+func (cs *ControllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+	logrus.Infof("DeleteSnapshot req: %v", req)
+
+	// Validate request
+	if err := validateDeleteSnapshotRequest(req); err != nil {
+		return nil, err
+	}
+
+	// Get the host snapshot (returns nil if not found)
+	hostSnap, err := cs.getHostSnap(ctx, req.GetSnapshotId())
+	if errors.IsNotFound(err) {
+		return &csi.DeleteSnapshotResponse{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Delete the snapshot
+	err = cs.deleteHostSnap(ctx, hostSnap)
+	if errors.IsNotFound(err) {
+		return &csi.DeleteSnapshotResponse{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &csi.DeleteSnapshotResponse{}, nil
+}
+
+// validateListSnapshotsRequest validates the ListSnapshotsRequest and prepares list options
+func validateListSnapshotsRequest(req *csi.ListSnapshotsRequest) (metav1.ListOptions, error) {
+	// Validate request parameters
+	if req.MaxEntries < 0 {
+		return metav1.ListOptions{}, status.Error(codes.InvalidArgument, "MaxEntries cannot be negative")
+	}
+
+	// Prepare list options
+	listOptions := metav1.ListOptions{}
+
+	// Handle pagination
+	if req.StartingToken != "" {
+		listOptions.Continue = req.StartingToken
+	}
+
+	// Set limit if MaxEntries is specified
+	if req.MaxEntries > 0 {
+		listOptions.Limit = int64(req.MaxEntries)
+	}
+
+	return listOptions, nil
+}
+
+// shouldIncludeSnapshot determines if a snapshot should be included based on request filters
+func (cs *ControllerServer) shouldIncludeSnapshot(hostSnap *snapshotv1.VolumeSnapshot, req *csi.ListSnapshotsRequest) bool {
+	// Skip snapshots that don't have the required labels (not created by this driver)
+	if err := cs.validateHostSnapLabels(hostSnap); err != nil {
+		logrus.Debugf("Skipping snapshot %s: %v", hostSnap.Name, err)
+		return false
+	}
+
+	// Filter by snapshot ID if requested
+	if req.SnapshotId != "" && hostSnap.Name != req.SnapshotId {
+		return false
+	}
+
+	// Filter by source volume ID if requested
+	if req.SourceVolumeId != "" {
+		// Get the source PVC name from the snapshot spec
+		if hostSnap.Spec.Source.PersistentVolumeClaimName == nil ||
+			*hostSnap.Spec.Source.PersistentVolumeClaimName != req.SourceVolumeId {
+			return false
+		}
+	}
+
+	return true
+}
+
+// convertHostSnapshotToEntry converts a host snapshot to a CSI ListSnapshotsResponse_Entry
+func (cs *ControllerServer) convertHostSnapshotToEntry(hostSnap *snapshotv1.VolumeSnapshot) (*csi.ListSnapshotsResponse_Entry, error) {
+	// Get source volume ID from snapshot spec
+	vol := ""
+	if hostSnap.Spec.Source.PersistentVolumeClaimName != nil {
+		vol = *hostSnap.Spec.Source.PersistentVolumeClaimName
+	}
+
+	// Convert to CSI snapshot
+	csiSnapshot, err := cs.convertVolumeSnapshotToCSI(hostSnap, vol)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert snapshot %s to CSI format: %w", hostSnap.Name, err)
+	}
+
+	return &csi.ListSnapshotsResponse_Entry{
+		Snapshot: csiSnapshot,
+	}, nil
+}
+
+// processHostSnapshots converts host snapshots to CSI snapshots with filtering
+func (cs *ControllerServer) processHostSnapshots(hostSnaps *snapshotv1.VolumeSnapshotList, req *csi.ListSnapshotsRequest) []*csi.ListSnapshotsResponse_Entry {
+	var csiSnapshots []*csi.ListSnapshotsResponse_Entry
+
+	for _, hostSnap := range hostSnaps.Items {
+		if !cs.shouldIncludeSnapshot(&hostSnap, req) {
+			continue
+		}
+
+		entry, err := cs.convertHostSnapshotToEntry(&hostSnap)
+		if err != nil {
+			logrus.Warnf("Failed to convert snapshot %s: %v", hostSnap.Name, err)
+			continue
+		}
+
+		csiSnapshots = append(csiSnapshots, entry)
+	}
+
+	return csiSnapshots
+}
+
+func (cs *ControllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+	logrus.Infof("ListSnapshots req: %v", req)
+
+	// Validate request and prepare list options
+	listOptions, err := validateListSnapshotsRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// List all volume snapshots in the namespace
+	hostSnaps, err := cs.listHostSnaps(ctx, listOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert and filter snapshots
+	csiSnapshots := cs.processHostSnapshots(hostSnaps, req)
+
+	// Prepare response
+	response := &csi.ListSnapshotsResponse{
+		Entries: csiSnapshots,
+	}
+
+	// Set next token for pagination if there are more results
+	if hostSnaps.Continue != "" {
+		response.NextToken = hostSnaps.Continue
+	}
+
+	logrus.Infof("ListSnapshots returning %d snapshots", len(csiSnapshots))
+	return response, nil
 }
 
 func (cs *ControllerServer) ControllerModifyVolume(context.Context, *csi.ControllerModifyVolumeRequest) (*csi.ControllerModifyVolumeResponse, error) {
@@ -717,7 +1283,7 @@ func (cs *ControllerServer) waitForPVCState(name string, stateDescription string
 	}
 }
 
-func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []*csi.VolumeCapability, volumeParameters map[string]string, volSizeBytes int64) (*corev1.PersistentVolumeClaim, error) {
+func (cs *ControllerServer) buildHostPVCFromScratch(name string, vc []*csi.VolumeCapability, vp map[string]string, size int64) (*corev1.PersistentVolumeClaim, error) {
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: cs.namespace,
@@ -728,14 +1294,14 @@ func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []
 		},
 	}
 
-	volumeMode := cs.getVolumeMode(volCaps)
-	targetSC, targetProvisioner, err := cs.getStorageClass(volumeParameters)
+	volumeMode := cs.getVolumeMode(vc)
+	targetSC, targetProvisioner, err := cs.getStorageClass(vp)
 	if err != nil {
 		logrus.Errorf("Failed to get the StorageClass: %v", err)
 		return nil, err
 	}
 	// if the paramHostVolMode is set, we should respect it
-	if val, exists := volumeParameters[paramHostVolMode]; exists {
+	if val, exists := vp[paramHostVolMode]; exists {
 		if val == "filesystem" {
 			volumeMode = corev1.PersistentVolumeFilesystem
 		}
@@ -750,7 +1316,7 @@ func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []
 	}
 
 	// Round up to multiple of 2 * 1024 * 1024
-	volSizeBytes = utils.RoundUpSize(volSizeBytes)
+	size = utils.RoundUpSize(size)
 
 	pvc.Spec.VolumeMode = &volumeMode
 	if targetSC != "" {
@@ -759,7 +1325,7 @@ func (cs *ControllerServer) generateHostClusterPVCFormat(name string, volCaps []
 
 	pvc.Spec.Resources = corev1.VolumeResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceStorage: *resource.NewQuantity(volSizeBytes, resource.BinarySI),
+			corev1.ResourceStorage: *resource.NewQuantity(size, resource.BinarySI),
 		},
 	}
 	return pvc, nil
@@ -888,4 +1454,35 @@ func (cs *ControllerServer) isVolumeInUse(volumeID string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// validateHostSnapLabels validates that the host snapshot has the required labels
+func (cs *ControllerServer) validateHostSnapLabels(hostSnap *snapshotv1.VolumeSnapshot) error {
+	if hostSnap == nil {
+		return fmt.Errorf("host snapshot cannot be nil")
+	}
+
+	if hostSnap.Labels == nil {
+		return fmt.Errorf("host snapshot %s is missing required labels", hostSnap.Name)
+	}
+
+	// Check for required labels
+	requiredLabels := []string{
+		labelSnapHostSC,
+		labelSnapHostStorage,
+		labelSnapHostVolumeMode,
+	}
+
+	missingLabels := []string{}
+	for _, label := range requiredLabels {
+		if _, exists := hostSnap.Labels[label]; !exists {
+			missingLabels = append(missingLabels, label)
+		}
+	}
+
+	if len(missingLabels) > 0 {
+		return fmt.Errorf("host snapshot %s is missing required labels: %v", hostSnap.Name, missingLabels)
+	}
+
+	return nil
 }
