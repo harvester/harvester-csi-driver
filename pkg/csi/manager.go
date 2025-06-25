@@ -10,6 +10,7 @@ import (
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	"github.com/harvester/harvester/pkg/util"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
+	snapclient "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/rancher/wrangler/pkg/signals"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
@@ -35,6 +36,7 @@ const (
 	calicoMacAddress          = "ee:ee:ee:ee:ee:ee"
 	loopBackMacAddress        = "00:00:00:00:00:00"
 	csiOnlineExpandValidation = "csi-online-expand-validation"
+	csiDriverConfig           = "csi-driver-config"
 	threadiness               = 2 // Number of threads to use for the CSI driver
 )
 
@@ -128,6 +130,11 @@ func (m *Manager) Run(cfg *config.Config) error {
 		return err
 	}
 
+	snapClient, err := snapclient.NewForConfig(restConfig)
+	if err != nil {
+		return err
+	}
+
 	nodeID := cfg.NodeID
 
 	ifaces, err := sysfsnet.Interfaces()
@@ -178,6 +185,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 		kubeClient,
 		harvNetworkFSClient,
 		harvClient,
+		snapClient,
 		localPods,
 		namespace,
 		cfg.HostStorageClass,
