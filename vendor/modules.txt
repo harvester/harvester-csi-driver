@@ -344,6 +344,7 @@ github.com/rancher/wrangler/pkg/name
 github.com/rancher/wrangler/pkg/objectset
 github.com/rancher/wrangler/pkg/patch
 github.com/rancher/wrangler/pkg/schemes
+github.com/rancher/wrangler/pkg/signals
 github.com/rancher/wrangler/pkg/stringset
 # github.com/rancher/wrangler/v3 v3.1.0
 ## explicit; go 1.22.0
@@ -361,11 +362,13 @@ github.com/rancher/wrangler/v3/pkg/genericcondition
 github.com/rancher/wrangler/v3/pkg/gvk
 github.com/rancher/wrangler/v3/pkg/kubeconfig
 github.com/rancher/wrangler/v3/pkg/kv
+github.com/rancher/wrangler/v3/pkg/leader
 github.com/rancher/wrangler/v3/pkg/merr
 github.com/rancher/wrangler/v3/pkg/name
 github.com/rancher/wrangler/v3/pkg/objectset
 github.com/rancher/wrangler/v3/pkg/patch
 github.com/rancher/wrangler/v3/pkg/schemes
+github.com/rancher/wrangler/v3/pkg/start
 github.com/rancher/wrangler/v3/pkg/stringset
 github.com/rancher/wrangler/v3/pkg/summary
 github.com/rancher/wrangler/v3/pkg/unstructured
@@ -994,7 +997,7 @@ k8s.io/kube-openapi/pkg/schemaconv
 k8s.io/kube-openapi/pkg/spec3
 k8s.io/kube-openapi/pkg/util/proto
 k8s.io/kube-openapi/pkg/validation/spec
-# k8s.io/kubernetes v1.32.2 => k8s.io/kubernetes v1.31.5
+# k8s.io/kubernetes v1.32.2 => k8s.io/kubernetes v1.31.6
 ## explicit; go 1.22.0
 k8s.io/kubernetes/pkg/util/filesystem
 k8s.io/kubernetes/pkg/volume/util/hostutil
@@ -1179,4 +1182,4 @@ sigs.k8s.io/yaml/goyaml.v2
 # github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20240919204204-3da2ae0cabd1
 # go.qase.io/client => github.com/rancher/qase-go/client v0.0.0-20231114201952-65195ec001fa
 # helm.sh/helm/v3 => github.com/rancher/helm/v3 v3.15.1-rancher2
-# k8s.io/kubernetes => k8s.io/kubernetes v1.31.5
+# k8s.io/kubernetes => k8s.io/kubernetes v1.31.6

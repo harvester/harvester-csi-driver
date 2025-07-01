@@ -38,6 +38,7 @@ require (
 	github.com/kubernetes-csi/csi-lib-utils v0.20.0
 	github.com/longhorn/longhorn-manager v1.8.1
 	github.com/pkg/errors v0.9.1
+	github.com/rancher/wrangler v1.1.2
 	github.com/rancher/wrangler/v3 v3.1.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli v1.22.16
@@ -122,7 +123,6 @@ require (
 	github.com/rancher/rancher/pkg/apis v0.0.0 // indirect
 	github.com/rancher/rke v1.6.2 // indirect
 	github.com/rancher/system-upgrade-controller/pkg/apis v0.0.0-20240301001845-4eacc2dabbde // indirect
-	github.com/rancher/wrangler v1.1.2 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/spf13/cast v1.6.0 // indirect
 	github.com/spf13/cobra v1.8.1 // indirect
@@ -173,5 +173,5 @@ replace (
 	github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20240919204204-3da2ae0cabd1
 	go.qase.io/client => github.com/rancher/qase-go/client v0.0.0-20231114201952-65195ec001fa
 	helm.sh/helm/v3 => github.com/rancher/helm/v3 v3.15.1-rancher2
-	k8s.io/kubernetes => k8s.io/kubernetes v1.31.5
+	k8s.io/kubernetes => k8s.io/kubernetes v1.31.6
 )
