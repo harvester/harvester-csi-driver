@@ -10,9 +10,12 @@ import (
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
+	"github.com/rancher/wrangler/pkg/signals"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/storage"
 	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
+	"github.com/rancher/wrangler/v3/pkg/leader"
+	"github.com/rancher/wrangler/v3/pkg/start"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -21,6 +24,7 @@ import (
 	"kubevirt.io/client-go/kubecli"
 
 	"github.com/harvester/harvester-csi-driver/pkg/config"
+	"github.com/harvester/harvester-csi-driver/pkg/controller/node"
 	"github.com/harvester/harvester-csi-driver/pkg/sysfsnet"
 	"github.com/harvester/harvester-csi-driver/pkg/version"
 )
@@ -30,6 +34,7 @@ const (
 	calicoMacAddress          = "ee:ee:ee:ee:ee:ee"
 	loopBackMacAddress        = "00:00:00:00:00:00"
 	csiOnlineExpandValidation = "csi-online-expand-validation"
+	threadiness               = 2 // Number of threads to use for the CSI driver
 )
 
 var errVMINotFound = errors.New("not found")
@@ -45,11 +50,30 @@ func GetCSIManager() *Manager {
 }
 
 func (m *Manager) Run(cfg *config.Config) error {
+	ctx := signals.SetupSignalContext()
 	// Use the default kubeconfig path if the configured kubeconfig file path is not existing.
 	if _, err := os.Stat(cfg.KubeConfig); os.IsNotExist(err) {
 		logrus.Infof("because the file [%s] is not existing, use default kubeconfig path [%s]: ", cfg.KubeConfig, defaultKubeconfigPath)
 		cfg.KubeConfig = defaultKubeconfigPath
 	} else if err != nil {
+		return err
+	}
+
+	localClientCfg, err := rest.InClusterConfig()
+	if err != nil {
+		logrus.Errorf("Failed to get in-cluster config: %v", err)
+		return nil
+	}
+
+	localKubeClient, err := kubernetes.NewForConfig(localClientCfg)
+	if err != nil {
+		logrus.Errorf("Failed to create local kube client: %v", err)
+		return err
+	}
+
+	localCoreClient, err := core.NewFactoryFromConfig(localClientCfg)
+	if err != nil {
+		logrus.Errorf("Failed to create local core client: %v", err)
 		return err
 	}
 
@@ -153,9 +177,32 @@ func (m *Manager) Run(cfg *config.Config) error {
 		cfg.HostStorageClass,
 	)
 
+	cb := func(ctx context.Context) {
+		if err := node.Register(ctx, localCoreClient.Core().V1().Node(), virtClient, nodeID, namespace); err != nil {
+			logrus.Errorf("Failed to register event controller: %v", err)
+		}
+		if err := start.All(ctx, threadiness, localCoreClient); err != nil {
+			logrus.Errorf("Failed to start controllers: %v", err)
+		}
+
+		<-ctx.Done()
+	}
+
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()
 	s.Start(cfg.Endpoint, m.ids, m.cs, m.ns)
+	// only run event controller on CP nodes
+	if localKubeClient != nil {
+		node, err := localKubeClient.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
+		if err == nil {
+			if v, find := node.Labels["node-role.kubernetes.io/control-plane"]; find && v == "true" {
+				logrus.Infof("Running node controller on control plane node: %s", nodeID)
+				leader.RunOrDie(ctx, "kube-system", "harvester-csi-node-monitor", localKubeClient, cb)
+			} else {
+				logrus.Infof("Skipping node controller on non-control plane node: %s", nodeID)
+			}
+		}
+	}
 	s.Wait()
 
 	return nil
