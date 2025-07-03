@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
+	"github.com/harvester/harvester/pkg/util"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
 	"github.com/rancher/wrangler/pkg/signals"
@@ -155,6 +156,9 @@ func (m *Manager) Run(cfg *config.Config) error {
 		return err
 	}
 
+	localPods := localCoreClient.Core().V1().Pod().Cache()
+	localPods.AddIndexer(util.IndexPodByPVC, util.IndexPodByPVCFunc)
+
 	m.ids = NewIdentityServer(driverName, version.FriendlyVersion())
 	m.ns = NewNodeServer(
 		coreClient.Core().V1(),
@@ -173,6 +177,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 		kubeClient,
 		harvNetworkFSClient,
 		harvClient,
+		localPods,
 		namespace,
 		cfg.HostStorageClass,
 	)

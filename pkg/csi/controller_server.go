@@ -7,6 +7,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
+	"github.com/harvester/harvester/pkg/util"
 	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	lhclientset "github.com/longhorn/longhorn-manager/k8s/pkg/client/clientset/versioned"
@@ -44,6 +45,8 @@ type ControllerServer struct {
 	namespace        string
 	hostStorageClass string
 
+	pods ctlv1.PodCache
+
 	// these clients are used to access the host cluster resources
 	kubeClient      *kubernetes.Clientset
 	coreClient      ctlv1.Interface
@@ -66,6 +69,7 @@ func NewControllerServer(
 	kubeClient *kubernetes.Clientset,
 	harvNetFSClient *harvnetworkfsset.Clientset,
 	harvClient *harvclient.Clientset,
+	pods ctlv1.PodCache,
 	namespace string,
 	hostStorageClass string,
 ) *ControllerServer {
@@ -91,6 +95,7 @@ func NewControllerServer(
 		kubeClient:       kubeClient,
 		harvNetFSClient:  harvNetFSClient,
 		harvClient:       harvClient,
+		pods:             pods,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -605,6 +610,19 @@ func (cs *ControllerServer) unpublishRWXVolume(pvc *corev1.PersistentVolumeClaim
 	}
 	if networkfs.Spec.DesiredState == networkfsv1.NetworkFSStateDisabled || networkfs.Status.State == networkfsv1.NetworkFSStateDisabling {
 		// do nothing if the networkfilesystem is already disabled
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	// if other pods are still using this network filesystem, we cannot disable it
+	index := fmt.Sprintf("%s-%s", pvc.Namespace, pvc.Name)
+	if pods, err := cs.pods.GetByIndex(util.IndexPodByPVC, index); err == nil && len(pods) > 0 {
+		// do nothing if there are still pods using this network filesystem
+		podList := []string{}
+		for _, pod := range pods {
+			indexedPod := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
+			podList = append(podList, indexedPod)
+		}
+		logrus.Warnf("Cannot disable NetworkFileSystem %s, there are still pods using it: %v", pvc.Spec.VolumeName, podList)
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
 
