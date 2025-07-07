@@ -337,7 +337,7 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 	if err := wait.PollUntilContextTimeout(context.Background(), genericTickTime, genericTimeout, true, func(context.Context) (bool, error) {
 		return cs.waitForVASettled(pvc, req.GetNodeId())
 	}); err != nil {
-		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to wait the volume %s status to settled", req.GetVolumeId())
+		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to wait the volume %s status to settled, err: %v", req.GetVolumeId(), err)
 	}
 
 	opts := &kubevirtv1.AddVolumeOptions{
@@ -376,15 +376,20 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 
 // waitForVaSettled used to ensure the host VA is cleaned up before we attach the volume on the guest cluster.
 func (cs *ControllerServer) waitForVASettled(pvc *corev1.PersistentVolumeClaim, nodeID string) (bool, error) {
+	skipCheckHostVA := false
+	hostVAs, err := cs.kubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		// ignore error here becaseu we might have permission issue ono old Harvester cluster
+		logrus.Warnf("Failed to list VolumeAttachments: %v, Skip VA checking because the host might be the old version.", err)
+		skipCheckHostVA = true
+	}
 	volumeMode := pvc.Spec.VolumeMode
-	if volumeMode == nil || *volumeMode == corev1.PersistentVolumeFilesystem {
-		// for Filesystem volume, we need to check the VM device
-		if !cs.checkVolumeInUseByVM(pvc) {
+	if !cs.checkVolumeInUseByVM(pvc) {
+		if skipCheckHostVA || volumeMode == nil || *volumeMode == corev1.PersistentVolumeFilesystem {
 			return true, nil
 		}
-		logrus.Warnf("Filesystem Volume %s is already attached to node %s, cannot attach to node %s", pvc.Spec.VolumeName, nodeID, nodeID)
-		return false, nil
-
+	} else {
+		logrus.Infof("Volume %s is already attached to node", pvc.Spec.VolumeName)
 	}
 
 	// get corresponding nodeID of the VM
@@ -396,10 +401,6 @@ func (cs *ControllerServer) waitForVASettled(pvc *corev1.PersistentVolumeClaim, 
 
 	// for block volume, we need to check the volumeattachments
 	// and ensure there is no any volumeattachment on the host side.
-	hostVAs, err := cs.kubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		return false, status.Errorf(codes.Internal, "failed to list Guest VolumeAttachments: %v", err)
-	}
 	volumeID := pvc.Spec.VolumeName
 	for _, va := range hostVAs.Items {
 		if *va.Spec.Source.PersistentVolumeName == volumeID && va.Spec.NodeName != targetHostNodeID {
