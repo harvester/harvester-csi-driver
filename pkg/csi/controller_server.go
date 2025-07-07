@@ -47,6 +47,9 @@ type ControllerServer struct {
 
 	pods ctlv1.PodCache
 
+	// local clients
+	localCoreClient ctlv1.Interface
+
 	// these clients are used to access the host cluster resources
 	kubeClient      *kubernetes.Clientset
 	coreClient      ctlv1.Interface
@@ -62,6 +65,7 @@ type ControllerServer struct {
 }
 
 func NewControllerServer(
+	localCoreClient ctlv1.Interface,
 	coreClient ctlv1.Interface,
 	storageClient ctlstoragev1.Interface,
 	virtClient kubecli.KubevirtClient,
@@ -88,6 +92,7 @@ func NewControllerServer(
 	return &ControllerServer{
 		namespace:        namespace,
 		hostStorageClass: hostStorageClass,
+		localCoreClient:  localCoreClient,
 		coreClient:       coreClient,
 		storageClient:    storageClient,
 		virtClient:       virtClient,
@@ -613,8 +618,16 @@ func (cs *ControllerServer) unpublishRWXVolume(pvc *corev1.PersistentVolumeClaim
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
 
+	localPV, err := cs.localCoreClient.PersistentVolume().Get(pvc.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get local PV %s: %v", pvc.Spec.VolumeName, err)
+	}
+	localPVCNS := localPV.Spec.ClaimRef.Namespace
+	localPVCName := localPV.Spec.ClaimRef.Name
+
 	// if other pods are still using this network filesystem, we cannot disable it
-	index := fmt.Sprintf("%s-%s", pvc.Namespace, pvc.Name)
+	index := fmt.Sprintf("%s-%s", localPVCNS, localPVCName)
+	logrus.Debugf("trying to get pods by index %s", index)
 	if pods, err := cs.pods.GetByIndex(util.IndexPodByPVC, index); err == nil && len(pods) > 0 {
 		// do nothing if there are still pods using this network filesystem
 		podList := []string{}
