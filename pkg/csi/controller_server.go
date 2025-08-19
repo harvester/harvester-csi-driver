@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	harvesterv1beta1 "github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	"github.com/harvester/harvester/pkg/settings"
 	"github.com/harvester/harvester/pkg/util"
@@ -152,6 +153,9 @@ func (cs *ControllerServer) getHostPVC(vol string) (*corev1.PersistentVolumeClai
 
 func (cs *ControllerServer) createHostPVC(hostPVC *corev1.PersistentVolumeClaim) (*corev1.PersistentVolumeClaim, error) {
 	return cs.coreClient.PersistentVolumeClaim().Create(hostPVC)
+}
+func (cs *ControllerServer) getHarvCSIConfig(ctx context.Context) (*harvesterv1beta1.Setting, error) {
+	return cs.harvClient.HarvesterhciV1beta1().Settings().Get(ctx, csiDriverConfig, metav1.GetOptions{})
 }
 
 func (cs *ControllerServer) validStorageClass(storageClassName string) (*storagev1.StorageClass, error) {
@@ -642,24 +646,30 @@ func (cs *ControllerServer) GetCapacity(context.Context, *csi.GetCapacityRequest
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (cs *ControllerServer) getHostSnapClass(hostPVC *corev1.PersistentVolumeClaim) (string, error) {
-	// Fetch csi driver configuration
-	config := map[string]settings.CSIDriverInfo{}
-	if err := json.Unmarshal([]byte(settings.CSIDriverConfig.GetDefault()), &config); err != nil {
-		return "", fmt.Errorf("unmarshal failed, error: %w, value: %s", err, settings.CSIDriverConfig.GetDefault())
+func (cs *ControllerServer) getHostSnapClass(ctx context.Context, hostPVC *corev1.PersistentVolumeClaim) (string, error) {
+	csiConfig, err := cs.getHarvCSIConfig(ctx)
+	if err != nil {
+		return "", err
 	}
 
+	csiInfo := map[string]settings.CSIDriverInfo{}
+	if err := json.Unmarshal([]byte(csiConfig.Default), &csiInfo); err != nil {
+		return "", fmt.Errorf("unmarshal failed, error: %w, value: %s", err, settings.CSIDriverConfig.GetDefault())
+	}
+	logrus.Infof("csi info from default: %v", csiInfo)
+
 	provisioner := hostPVC.Annotations[utils.AnnStorageProvisioner]
-	if info, found := config[provisioner]; found && info.VolumeSnapshotClassName != "" {
+	if info, found := csiInfo[provisioner]; found && info.VolumeSnapshotClassName != "" {
 		return info.VolumeSnapshotClassName, nil
 	}
 
-	config = map[string]settings.CSIDriverInfo{}
-	if err := json.Unmarshal([]byte(settings.CSIDriverConfig.Get()), &config); err != nil {
+	csiInfo = map[string]settings.CSIDriverInfo{}
+	if err := json.Unmarshal([]byte(csiConfig.Value), &csiInfo); err != nil {
 		return "", fmt.Errorf("unmarshal failed, error: %w, value: %s", err, settings.CSIDriverConfig.Get())
 	}
+	logrus.Infof("csi info from value: %v", csiInfo)
 
-	if info, found := config[provisioner]; found && info.VolumeSnapshotClassName != "" {
+	if info, found := csiInfo[provisioner]; found && info.VolumeSnapshotClassName != "" {
 		return info.VolumeSnapshotClassName, nil
 	}
 
@@ -877,7 +887,7 @@ func (cs *ControllerServer) createSnapFromVolume(ctx context.Context, name, vol 
 // createHostSnapshot creates a new host snapshot from the given PVC
 func (cs *ControllerServer) generateHostSnap(ctx context.Context, name string, hostPVC *corev1.PersistentVolumeClaim) (*snapshotv1.VolumeSnapshot, error) {
 	// Get host volume snapshot class
-	hostSnapClass, err := cs.getHostSnapClass(hostPVC)
+	hostSnapClass, err := cs.getHostSnapClass(ctx, hostPVC)
 	if err != nil {
 		return nil, err
 	}
