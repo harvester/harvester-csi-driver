@@ -777,35 +777,10 @@ func (cs *ControllerServer) checkSnapsReadiness(ctx context.Context, hostSnap st
 	return false // continue waiting
 }
 
-func (cs *ControllerServer) waitForHostSnapReady(ctx context.Context, hostSnap string) bool {
-	logrus.Infof("Waiting for snapshot %s to become ready (timeout: %v)", hostSnap, snapReadyTimeout)
-
-	timer := time.NewTimer(snapReadyTimeout)
-	defer timer.Stop()
-	timeout := timer.C
-
-	ticker := time.NewTicker(genericTickTime)
-	defer ticker.Stop()
-	tick := ticker.C
-
-	for {
-		select {
-		case <-timeout:
-			logrus.Infof("Timeout waiting for snapshot %s to become ready", hostSnap)
-			return false
-		case <-tick:
-			if ready := cs.checkSnapsReadiness(ctx, hostSnap); ready {
-				return ready
-			}
-		}
-	}
-}
-
 // prepareSnapshotResponse waits for snapshot readiness and converts to CSI format
 func (cs *ControllerServer) prepareSnapshotResponse(ctx context.Context, hostSnap, vol string) (*csi.CreateSnapshotResponse, error) {
-	// Wait for snapshot to be ready
-	if !cs.waitForHostSnapReady(ctx, hostSnap) {
-		return nil, status.Errorf(codes.DeadlineExceeded, "host snap %s not become ready within %v", hostSnap, snapReadyTimeout)
+	if !cs.checkSnapsReadiness(ctx, hostSnap) {
+		return nil, status.Errorf(codes.Internal, "host snap %s is not ready", hostSnap)
 	}
 
 	// Get the updated snapshot with ready status
