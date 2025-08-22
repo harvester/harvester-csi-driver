@@ -45,7 +45,6 @@ const (
 	longhornProvisioner     = "driver.longhorn.io"
 	annoFSVolumeForVM       = "harvesterhci.io/volumeForVirtualMachine"
 	labelSnapHostSC         = "harvesterhci.io/snapHostSC"
-	labelSnapHostStorage    = "harvesterhci.io/snapHostStorage"
 	labelSnapHostVolumeMode = "harvesterhci.io/snapHostVolumeMode"
 	LonghornNS              = "longhorn-system"
 	HarvesterNS             = "harvester-system"
@@ -183,7 +182,7 @@ func (cs *ControllerServer) validStorageClass(storageClassName string) (*storage
 	return sc, nil
 }
 
-func (cs *ControllerServer) validateVolumeContentSource(ctx context.Context, vcs *csi.VolumeContentSource) error {
+func (cs *ControllerServer) validateVolumeContentSource(vcs *csi.VolumeContentSource, vc []*csi.VolumeCapability) error {
 	if vcs == nil {
 		return nil
 	}
@@ -201,10 +200,18 @@ func (cs *ControllerServer) validateVolumeContentSource(ctx context.Context, vcs
 		return status.Error(codes.InvalidArgument, "Snapshot source is specified but SnapshotId is empty")
 	}
 
+	// Check if the volume has RWX access mode and prevent snapshot-based volume creation
+	for _, v := range vc {
+		if v.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			return status.Error(codes.InvalidArgument, "Creating RWX volumes from snapshots is not supported")
+		}
+	}
+
 	return nil
 }
 
-func (cs *ControllerServer) validateCreateVolReq(ctx context.Context, req *csi.CreateVolumeRequest) (map[string]string, int64, error) {
+// validateCreateVolReq validates a CreateVolumeRequest, ensuring the request is well-formed and returns the volume parameters and size.
+func (cs *ControllerServer) validateCreateVolReq(req *csi.CreateVolumeRequest) (map[string]string, int64, error) {
 	if err := cs.validateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
 		return nil, 0, status.Errorf(codes.InvalidArgument, "invalid create volume req: %v", err)
 	}
@@ -218,7 +225,7 @@ func (cs *ControllerServer) validateCreateVolReq(ctx context.Context, req *csi.C
 	}
 
 	// Validate VolumeContentSource
-	if err := cs.validateVolumeContentSource(ctx, req.GetVolumeContentSource()); err != nil {
+	if err := cs.validateVolumeContentSource(req.GetVolumeContentSource(), req.GetVolumeCapabilities()); err != nil {
 		return nil, 0, err
 	}
 
@@ -252,24 +259,10 @@ func (cs *ControllerServer) buildHostPVCFromSnap(ctx context.Context, name strin
 
 	// Extract information from snapshot labels
 	storageClassName := hostSnap.Labels[labelSnapHostSC]
-	storageCapacity := hostSnap.Labels[labelSnapHostStorage]
 	volumeModeStr := hostSnap.Labels[labelSnapHostVolumeMode]
 
 	if _, err := cs.getHostSC(storageClassName); err != nil {
 		return nil, err
-	}
-
-	// Parse storage capacity
-	storageQuantity, err := resource.ParseQuantity(storageCapacity)
-	if err != nil {
-		return nil, err
-	}
-
-	// Validate that the requested size is consistent with the snapshot storage capacity
-	snapshotSizeBytes := storageQuantity.Value()
-	if size > snapshotSizeBytes {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"Requested size %d bytes exceeds snapshot storage capacity %d bytes", size, snapshotSizeBytes)
 	}
 
 	// Parse volume mode
@@ -294,7 +287,7 @@ func (cs *ControllerServer) buildHostPVCFromSnap(ctx context.Context, name strin
 			StorageClassName: ptr.To(storageClassName),
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: storageQuantity,
+					corev1.ResourceStorage: *resource.NewQuantity(size, resource.BinarySI),
 				},
 			},
 			DataSource: &corev1.TypedLocalObjectReference{
@@ -324,7 +317,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	logrus.Infof("ControllerServer create volume req: %v", req)
 
 	// Validate request and get processed parameters
-	volumeParameters, volSizeBytes, err := cs.validateCreateVolReq(ctx, req)
+	volumeParameters, volSizeBytes, err := cs.validateCreateVolReq(req)
 	if err != nil {
 		return nil, err
 	}
@@ -686,11 +679,6 @@ func (cs *ControllerServer) generateHostSnapManifest(name, hostSnapClass string,
 		labelSnapHostSC: *hostPVC.Spec.StorageClassName,
 	}
 
-	// Add storage capacity label
-	if storage := hostPVC.Spec.Resources.Requests.Storage(); storage != nil {
-		labels[labelSnapHostStorage] = storage.String()
-	}
-
 	// Add volume mode label
 	volumeMode := corev1.PersistentVolumeBlock
 	if hostPVC.Spec.VolumeMode != nil {
@@ -933,7 +921,7 @@ func (cs *ControllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteS
 		return nil, err
 	}
 
-	return &csi.DeleteSnapshotResponse{}, nil
+	return nil, fmt.Errorf("host snapshot %s deletion not confirmed", req.GetSnapshotId())
 }
 
 // validateListSnapshotsRequest validates the ListSnapshotsRequest and prepares list options
@@ -1005,7 +993,7 @@ func (cs *ControllerServer) convertHostSnapshotToEntry(hostSnap *snapshotv1.Volu
 
 // processHostSnapshots converts host snapshots to CSI snapshots with filtering
 func (cs *ControllerServer) processHostSnapshots(hostSnaps *snapshotv1.VolumeSnapshotList, req *csi.ListSnapshotsRequest) []*csi.ListSnapshotsResponse_Entry {
-	var csiSnapshots []*csi.ListSnapshotsResponse_Entry
+	csiSnapshots := make([]*csi.ListSnapshotsResponse_Entry, 0, len(hostSnaps.Items))
 
 	for _, hostSnap := range hostSnaps.Items {
 		if !cs.shouldIncludeSnapshot(&hostSnap, req) {
@@ -1417,9 +1405,15 @@ func isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
 		return false
 	}
 	for _, mode := range pvc.Spec.AccessModes {
-		if mode == corev1.ReadWriteMany {
+		if mode != corev1.ReadWriteMany {
+			continue
+		}
+
+		// Check if the provisioner is Longhorn
+		if provisioner := pvc.Annotations[utils.AnnStorageProvisioner]; provisioner == longhornProvisioner {
 			return true
 		}
+
 	}
 	return false
 }
@@ -1454,7 +1448,6 @@ func (cs *ControllerServer) validateHostSnapLabels(hostSnap *snapshotv1.VolumeSn
 	// Check for required labels
 	requiredLabels := []string{
 		labelSnapHostSC,
-		labelSnapHostStorage,
 		labelSnapHostVolumeMode,
 	}
 
