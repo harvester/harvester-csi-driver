@@ -171,8 +171,10 @@ type ImagePreloadOption struct {
 type UpgradeConfig struct {
 	// Options for the Image Preload phase of Harvester Upgrade
 	PreloadOption ImagePreloadOption `json:"imagePreloadOption,omitempty"`
-	// set true to restore vm to the pre-upgrade state, this option only works under single node.
+	// set true to restore vm to the pre-upgrade state
 	RestoreVM bool `json:"restoreVM,omitempty"`
+	// LogReadyTimeout is the time in minutes to wait for LogReady condition to be set True or False.
+	LogReadyTimeout string `json:"logReadyTimeout,omitempty"`
 }
 
 func DecodeConfig[T any](value string) (*T, error) {
@@ -194,6 +196,7 @@ const (
 	AdditionalGuestMemoryOverheadRatioDefault = "1.5" // After kubevirt computes the overhead, it will further multiple with this factor
 )
 
+// nolint:govet
 type AdditionalGuestMemoryOverheadRatioConfig struct {
 	value string  `json:"value"`
 	ratio float64 `json:"ratio"` // converted from configured string
@@ -239,4 +242,8 @@ func (agmorc *AdditionalGuestMemoryOverheadRatioConfig) IsEmpty() bool {
 func ValidateAdditionalGuestMemoryOverheadRatioHelper(value string) error {
 	_, err := NewAdditionalGuestMemoryOverheadRatioConfig(value)
 	return err
+}
+
+type RancherClusterConfig struct {
+	RemoveUpstreamClusterWhenNamespaceIsDeleted bool `json:"removeUpstreamClusterWhenNamespaceIsDeleted"`
 }
