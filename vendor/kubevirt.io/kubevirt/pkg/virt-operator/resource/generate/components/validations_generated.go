@@ -526,37 +526,6 @@ var CRDsValidation map[string]string = map[string]string{
                 Resources represents the minimum resources the volume should have.
                 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
               properties:
-                claims:
-                  description: |-
-                    Claims lists the names of resources, defined in spec.resourceClaims,
-                    that are used by this container.
-
-                    This is an alpha field and requires enabling the
-                    DynamicResourceAllocation feature gate.
-
-                    This field is immutable. It can only be set for containers.
-                  items:
-                    description: ResourceClaim references one entry in PodSpec.ResourceClaims.
-                    properties:
-                      name:
-                        description: |-
-                          Name must match the name of one entry in pod.spec.resourceClaims of
-                          the Pod where this field is used. It makes that resource available
-                          inside a container.
-                        type: string
-                      request:
-                        description: |-
-                          Request is the name chosen for a request in the referenced claim.
-                          If empty, everything from the claim is made available, otherwise
-                          only the result of this request.
-                        type: string
-                    required:
-                    - name
-                    type: object
-                  type: array
-                  x-kubernetes-list-map-keys:
-                  - name
-                  x-kubernetes-list-type: map
                 limits:
                   additionalProperties:
                     anyOf:
@@ -914,6 +883,10 @@ var CRDsValidation map[string]string = map[string]string{
             developerConfiguration:
               description: DeveloperConfiguration holds developer options
               properties:
+                clusterProfiler:
+                  description: Enable the ability to pprof profile KubeVirt control
+                    plane
+                  type: boolean
                 cpuAllocationRatio:
                   description: |-
                     For each requested virtual CPU, CPUAllocationRatio defines how much physical CPU to request per VMI
@@ -961,6 +934,8 @@ var CRDsValidation map[string]string = map[string]string{
                     virtLauncher:
                       type: integer
                     virtOperator:
+                      type: integer
+                    virtSynchronizationController:
                       type: integer
                   type: object
                 memoryOvercommit:
@@ -1219,6 +1194,13 @@ var CRDsValidation map[string]string = map[string]string{
                     If set to true, migrations will still start in pre-copy, but switch to post-copy when
                     CompletionTimeoutPerGiB triggers. Defaults to false
                   type: boolean
+                allowWorkloadDisruption:
+                  description: |-
+                    AllowWorkloadDisruption indicates that the migration shouldn't be
+                    canceled after acceptableCompletionTime is exceeded. Instead, if
+                    permitted, migration will be switched to post-copy or the VMI will be
+                    paused to allow the migration to complete
+                  type: boolean
                 bandwidthPerMigration:
                   anyOf:
                   - type: integer
@@ -1231,8 +1213,8 @@ var CRDsValidation map[string]string = map[string]string{
                 completionTimeoutPerGiB:
                   description: |-
                     CompletionTimeoutPerGiB is the maximum number of seconds per GiB a migration is allowed to take.
-                    If a live-migration takes longer to migrate than this value multiplied by the size of the VMI,
-                    the migration will be cancelled, unless AllowPostCopy is true. Defaults to 150
+                    If the timeout is reached, the migration will be either paused, switched
+                    to post-copy or cancelled depending on other settings. Defaults to 150
                   format: int64
                   type: integer
                 disableTLS:
@@ -1589,17 +1571,17 @@ var CRDsValidation map[string]string = map[string]string{
                   type: object
               type: object
             vmRolloutStrategy:
-              description: VMRolloutStrategy defines how changes to a VM object propagate
-                to its VMI
+              description: |-
+                VMRolloutStrategy defines how live-updatable fields, like CPU sockets, memory,
+                tolerations, and affinity, are propagated from a VM to its VMI.
               enum:
               - Stage
               - LiveUpdate
               nullable: true
               type: string
             vmStateStorageClass:
-              description: |-
-                VMStateStorageClass is the name of the storage class to use for the PVCs created to preserve VM state, like TPM.
-                The storage class must support RWX in filesystem mode.
+              description: VMStateStorageClass is the name of the storage class to
+                use for the PVCs created to preserve VM state, like TPM.
               type: string
             webhookConfiguration:
               description: |-
@@ -2742,6 +2724,10 @@ var CRDsValidation map[string]string = map[string]string{
              When ServiceMonitorNamespace is set, then we'll install the service monitor object in that namespace
             otherwise we will use the monitoring namespace.
           type: string
+        synchronizationPort:
+          description: Specify the port to listen on for VMI status synchronization
+            traffic. Default is 9185
+          type: string
         uninstallStrategy:
           description: |-
             Specifies if kubevirt can be deleted if workloads are still present.
@@ -3863,6 +3849,11 @@ var CRDsValidation map[string]string = map[string]string{
           description: KubeVirtPhase is a label for the phase of a KubeVirt deployment
             at the current time.
           type: string
+        synchronizationAddresses:
+          items:
+            type: string
+          type: array
+          x-kubernetes-list-type: atomic
         targetDeploymentConfig:
           type: string
         targetDeploymentID:
@@ -3902,6 +3893,8 @@ var CRDsValidation map[string]string = map[string]string{
         allowAutoConverge:
           type: boolean
         allowPostCopy:
+          type: boolean
+        allowWorkloadDisruption:
           type: boolean
         bandwidthPerMigration:
           anyOf:
@@ -4498,37 +4491,6 @@ var CRDsValidation map[string]string = map[string]string{
                           Resources represents the minimum resources the volume should have.
                           More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
                         properties:
-                          claims:
-                            description: |-
-                              Claims lists the names of resources, defined in spec.resourceClaims,
-                              that are used by this container.
-
-                              This is an alpha field and requires enabling the
-                              DynamicResourceAllocation feature gate.
-
-                              This field is immutable. It can only be set for containers.
-                            items:
-                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
-                              properties:
-                                name:
-                                  description: |-
-                                    Name must match the name of one entry in pod.spec.resourceClaims of
-                                    the Pod where this field is used. It makes that resource available
-                                    inside a container.
-                                  type: string
-                                request:
-                                  description: |-
-                                    Request is the name chosen for a request in the referenced claim.
-                                    If empty, everything from the claim is made available, otherwise
-                                    only the result of this request.
-                                  type: string
-                              required:
-                              - name
-                              type: object
-                            type: array
-                            x-kubernetes-list-map-keys:
-                            - name
-                            x-kubernetes-list-type: map
                           limits:
                             additionalProperties:
                               anyOf:
@@ -5775,9 +5737,12 @@ var CRDsValidation map[string]string = map[string]string{
                           of a pod.
                         properties:
                           name:
-                            description: Required.
+                            description: |-
+                              Name is this DNS resolver option's name.
+                              Required.
                             type: string
                           value:
+                            description: Value is this DNS resolver option's value.
                             type: string
                         type: object
                       type: array
@@ -6095,7 +6060,11 @@ var CRDsValidation map[string]string = map[string]string{
                               cache:
                                 description: |-
                                   Cache specifies which kvm disk cache mode should be used.
-                                  Supported values are: CacheNone, CacheWriteThrough.
+                                  Supported values are:
+                                  none: Guest I/O not cached on the host, but may be kept in a disk cache.
+                                  writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
+                                  writeback: Guest I/O cached on the host.
+                                  Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                 type: string
                               cdrom:
                                 description: Attach a volume as a cdrom to the vmi.
@@ -6215,11 +6184,23 @@ var CRDsValidation map[string]string = map[string]string{
                           description: Whether to attach a GPU device to the vmi.
                           items:
                             properties:
+                              claimName:
+                                description: |-
+                                  ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                                  device is allocated
+                                type: string
                               deviceName:
+                                description: DeviceName is the name of the device
+                                  provisioned by device-plugins
                                 type: string
                               name:
                                 description: Name of the GPU device as exposed by
                                   a device plugin
+                                type: string
+                              requestName:
+                                description: |-
+                                  RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                                  device is requested
                                 type: string
                               tag:
                                 description: If specified, the virtual network interface
@@ -6249,7 +6230,6 @@ var CRDsValidation map[string]string = map[string]string{
                                     type: object
                                 type: object
                             required:
-                            - deviceName
                             - name
                             type: object
                           type: array
@@ -6258,11 +6238,21 @@ var CRDsValidation map[string]string = map[string]string{
                           description: Whether to attach a host device to the vmi.
                           items:
                             properties:
+                              claimName:
+                                description: |-
+                                  ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                                  device is allocated
+                                type: string
                               deviceName:
-                                description: DeviceName is the resource name of the
-                                  host device exposed by a device plugin
+                                description: DeviceName is the name of the device
+                                  provisioned by device-plugins
                                 type: string
                               name:
+                                type: string
+                              requestName:
+                                description: |-
+                                  RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                                  device is requested
                                 type: string
                               tag:
                                 description: If specified, the virtual network interface
@@ -6270,7 +6260,6 @@ var CRDsValidation map[string]string = map[string]string{
                                   via config drive
                                 type: string
                             required:
-                            - deviceName
                             - name
                             type: object
                           type: array
@@ -6452,7 +6441,11 @@ var CRDsValidation map[string]string = map[string]string{
                               state:
                                 description: |-
                                   State represents the requested operational state of the interface.
-                                  The (only) value supported is 'absent', expressing a request to remove the interface.
+                                  The supported values are:
+                                  'absent', expressing a request to remove the interface.
+                                  'down', expressing a request to set the link down.
+                                  'up', expressing a request to set the link up.
+                                  Empty value functions as 'up'.
                                 type: string
                               tag:
                                 description: If specified, the virtual network interface
@@ -6478,6 +6471,19 @@ var CRDsValidation map[string]string = map[string]string{
                             depends on additional factors of the VirtualMachineInstance,
                             like the number of guest CPUs.
                           type: boolean
+                        panicDevices:
+                          description: PanicDevices provides additional crash information
+                            when a guest crashes.
+                          items:
+                            properties:
+                              model:
+                                description: |-
+                                  Model specifies what type of panic device is provided.
+                                  The panic model used when this attribute is missing depends on the hypervisor and guest arch.
+                                  One of: isa, hyperv, pvpanic.
+                                type: string
+                            type: object
+                          type: array
                         rng:
                           description: Whether to have random number generator from
                             host
@@ -6500,6 +6506,11 @@ var CRDsValidation map[string]string = map[string]string{
                         tpm:
                           description: Whether to emulate a TPM device.
                           properties:
+                            enabled:
+                              description: |-
+                                Enabled allows a user to explicitly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+                                Defaults to True
+                              type: boolean
                             persistent:
                               description: |-
                                 Persistent indicates the state of the TPM device should be kept accross reboots
@@ -6512,10 +6523,30 @@ var CRDsValidation map[string]string = map[string]string{
                             This is helpful for old machines like CentOS6 or RHEL6 which
                             do not understand virtio_non_transitional (virtio 1.0).
                           type: boolean
+                        video:
+                          description: Video describes the video device configuration
+                            for the vmi.
+                          properties:
+                            type:
+                              description: |-
+                                Type specifies the video device type (e.g., virtio, vga, bochs, ramfb).
+                                If not specified, the default is architecture-dependent (VGA for BIOS-based VMs, Bochs for EFI-based VMs on AMD64; virtio for Arm and s390x).
+                              type: string
+                          type: object
                         watchdog:
                           description: Watchdog describes a watchdog device which
                             can be added to the vmi.
                           properties:
+                            diag288:
+                              description: diag288 watchdog device (specific to s390x
+                                architecture).
+                              properties:
+                                action:
+                                  description: |-
+                                    The action to take. Valid values are poweroff, reset, shutdown.
+                                    Defaults to reset.
+                                  type: string
+                              type: object
                             i6300esb:
                               description: i6300esb watchdog device.
                               properties:
@@ -6785,6 +6816,11 @@ var CRDsValidation map[string]string = map[string]string{
                         acpi:
                           description: Information that can be set in the ACPI table
                           properties:
+                            msdmNameRef:
+                              description: |-
+                                Similar to SlicNameRef, another ACPI entry that is used in more recent Windows versions.
+                                The above points to the spec of MSDM too.
+                              type: string
                             slicNameRef:
                               description: |-
                                 SlicNameRef should match the volume name of a secret object. The data in the secret should
@@ -6870,11 +6906,20 @@ var CRDsValidation map[string]string = map[string]string{
                             Defaults to a random generated uid.
                           type: string
                       type: object
+                    ioThreads:
+                      description: IOThreads specifies the IOThreads options.
+                      properties:
+                        supplementalPoolThreadCount:
+                          description: SupplementalPoolThreadCount specifies how many
+                            iothreads are allocated for the supplementalPool policy.
+                          format: int32
+                          type: integer
+                      type: object
                     ioThreadsPolicy:
                       description: |-
                         Controls whether or not disks will share IOThreads.
                         Omitting IOThreadsPolicy disables use of IOThreads.
-                        One of: shared, auto
+                        One of: shared, auto, supplementalPool
                       type: string
                     launchSecurity:
                       description: Launch Security setting of the vmi.
@@ -6989,7 +7034,7 @@ var CRDsValidation map[string]string = map[string]string{
                     - "None": No action will be taken, according to the specified 'RunStrategy' the VirtualMachine will be restarted or shutdown.
                     - "LiveMigrate": the VirtualMachineInstance will be migrated instead of being shutdown.
                     - "LiveMigrateIfPossible": the same as "LiveMigrate" but only if the VirtualMachine is Live-Migratable, otherwise it will behave as "None".
-                    - "External": the VirtualMachineInstance will be protected by a PDB and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
+                    - "External": the VirtualMachineInstance will be protected and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
                   type: string
                 hostname:
                   description: |-
@@ -7329,6 +7374,65 @@ var CRDsValidation map[string]string = map[string]string{
                       format: int32
                       type: integer
                   type: object
+                resourceClaims:
+                  description: |-
+                    ResourceClaims define which ResourceClaims must be allocated
+                    and reserved before the VMI, hence virt-launcher pod is allowed to start. The resources
+                    will be made available to the domain which consumes them
+                    by name.
+
+                    This is an alpha field and requires enabling the
+                    DynamicResourceAllocation feature gate in kubernetes
+                     https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/
+                    This field should only be configured if one of the feature-gates GPUsWithDRA or HostDevicesWithDRA is enabled.
+                    This feature is in alpha.
+                  items:
+                    description: |-
+                      PodResourceClaim references exactly one ResourceClaim, either directly
+                      or by naming a ResourceClaimTemplate which is then turned into a ResourceClaim
+                      for the pod.
+
+                      It adds a name to it that uniquely identifies the ResourceClaim inside the Pod.
+                      Containers that need access to the ResourceClaim reference it with this name.
+                    properties:
+                      name:
+                        description: |-
+                          Name uniquely identifies this resource claim inside the pod.
+                          This must be a DNS_LABEL.
+                        type: string
+                      resourceClaimName:
+                        description: |-
+                          ResourceClaimName is the name of a ResourceClaim object in the same
+                          namespace as this pod.
+
+                          Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                          be set.
+                        type: string
+                      resourceClaimTemplateName:
+                        description: |-
+                          ResourceClaimTemplateName is the name of a ResourceClaimTemplate
+                          object in the same namespace as this pod.
+
+                          The template will be used to create a new ResourceClaim, which will
+                          be bound to this pod. When this pod is deleted, the ResourceClaim
+                          will also be deleted. The pod name and resource name, along with a
+                          generated component, will be used to form a unique name for the
+                          ResourceClaim, which will be recorded in pod.status.resourceClaimStatuses.
+
+                          This field is immutable and no changes will be made to the
+                          corresponding ResourceClaim by the control plane after creating the
+                          ResourceClaim.
+
+                          Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                          be set.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                  - name
+                  x-kubernetes-list-type: map
                 schedulerName:
                   description: |-
                     If specified, the VMI will be dispatched by specified scheduler.
@@ -7748,9 +7852,8 @@ var CRDsValidation map[string]string = map[string]string{
                               can be hotplugged and hotunplugged.
                             type: boolean
                           name:
-                            description: |-
-                              Name of both the DataVolume and the PVC in the same namespace.
-                              After PVC population the DataVolume is garbage collected by default.
+                            description: Name of both the DataVolume and the PVC in
+                              the same namespace.
                             type: string
                         required:
                         - name
@@ -8085,6 +8188,35 @@ var CRDsValidation map[string]string = map[string]string{
             updated through an Update() before ObservedGeneration in Status.
           format: int64
           type: integer
+        instancetypeRef:
+          description: InstancetypeRef captures the state of any referenced instance
+            type from the VirtualMachine
+          nullable: true
+          properties:
+            controllerRevisionRef:
+              description: |-
+                ControllerRef specifies the ControllerRevision storing a copy of the object captured
+                when it is first seen by the VirtualMachine controller
+              properties:
+                name:
+                  description: Name of the ControllerRevision
+                  type: string
+              type: object
+            inferFromVolume:
+              description: InferFromVolume lists the name of a volume that should
+                be used to infer or discover the resource
+              type: string
+            inferFromVolumeFailurePolicy:
+              description: InferFromVolumeFailurePolicy controls what should happen
+                on failure when inferring the resource
+              type: string
+            kind:
+              description: Kind specifies the kind of resource
+              type: string
+            name:
+              description: Name is the name of resource
+              type: string
+          type: object
         memoryDumpRequest:
           description: |-
             MemoryDumpRequest tracks memory dump request phase and info of getting a memory
@@ -8126,6 +8258,35 @@ var CRDsValidation map[string]string = map[string]string{
             started.
           format: int64
           type: integer
+        preferenceRef:
+          description: PreferenceRef captures the state of any referenced preference
+            from the VirtualMachine
+          nullable: true
+          properties:
+            controllerRevisionRef:
+              description: |-
+                ControllerRef specifies the ControllerRevision storing a copy of the object captured
+                when it is first seen by the VirtualMachine controller
+              properties:
+                name:
+                  description: Name of the ControllerRevision
+                  type: string
+              type: object
+            inferFromVolume:
+              description: InferFromVolume lists the name of a volume that should
+                be used to infer or discover the resource
+              type: string
+            inferFromVolumeFailurePolicy:
+              description: InferFromVolumeFailurePolicy controls what should happen
+                on failure when inferring the resource
+              type: string
+            kind:
+              description: Kind specifies the kind of resource
+              type: string
+            name:
+              description: Name is the name of resource
+              type: string
+          type: object
         printableStatus:
           default: Stopped
           description: PrintableStatus is a human readable, high-level representation
@@ -8239,7 +8400,11 @@ var CRDsValidation map[string]string = map[string]string{
                       cache:
                         description: |-
                           Cache specifies which kvm disk cache mode should be used.
-                          Supported values are: CacheNone, CacheWriteThrough.
+                          Supported values are:
+                          none: Guest I/O not cached on the host, but may be kept in a disk cache.
+                          writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
+                          writeback: Guest I/O cached on the host.
+                          Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                         type: string
                       cdrom:
                         description: Attach a volume as a cdrom to the vmi.
@@ -8362,9 +8527,8 @@ var CRDsValidation map[string]string = map[string]string{
                               can be hotplugged and hotunplugged.
                             type: boolean
                           name:
-                            description: |-
-                              Name of both the DataVolume and the PVC in the same namespace.
-                              After PVC population the DataVolume is garbage collected by default.
+                            description: Name of both the DataVolume and the PVC in
+                              the same namespace.
                             type: string
                         required:
                         - name
@@ -8628,6 +8792,14 @@ var CRDsValidation map[string]string = map[string]string{
             NewSMBiosSerial manually sets that target's SMbios serial. If this field is not specified, a new serial will
             be generated automatically.
           type: string
+        patches:
+          description: |-
+            Patches holds JSON patches to apply to target. Patches should fit the target's Kind.
+            Example: '{"op": "add", "path": "/spec/template/metadata/labels/example", "value": "new-label"}'
+          items:
+            type: string
+          type: array
+          x-kubernetes-list-type: atomic
         source:
           description: |-
             Source is the object that would be cloned. Currently supported source types are:
@@ -8839,10 +9011,21 @@ var CRDsValidation map[string]string = map[string]string{
           description: Optionally defines any GPU devices associated with the instancetype.
           items:
             properties:
+              claimName:
+                description: |-
+                  ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                  device is allocated
+                type: string
               deviceName:
+                description: DeviceName is the name of the device provisioned by device-plugins
                 type: string
               name:
                 description: Name of the GPU device as exposed by a device plugin
+                type: string
+              requestName:
+                description: |-
+                  RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                  device is requested
                 type: string
               tag:
                 description: If specified, the virtual network interface address and
@@ -8871,7 +9054,6 @@ var CRDsValidation map[string]string = map[string]string{
                     type: object
                 type: object
             required:
-            - deviceName
             - name
             type: object
           type: array
@@ -8880,18 +9062,26 @@ var CRDsValidation map[string]string = map[string]string{
           description: Optionally defines any HostDevices associated with the instancetype.
           items:
             properties:
+              claimName:
+                description: |-
+                  ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                  device is allocated
+                type: string
               deviceName:
-                description: DeviceName is the resource name of the host device exposed
-                  by a device plugin
+                description: DeviceName is the name of the device provisioned by device-plugins
                 type: string
               name:
+                type: string
+              requestName:
+                description: |-
+                  RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                  device is requested
                 type: string
               tag:
                 description: If specified, the virtual network interface address and
                   its tag will be provided to the guest via config drive
                 type: string
             required:
-            - deviceName
             - name
             type: object
           type: array
@@ -9275,6 +9465,10 @@ var CRDsValidation map[string]string = map[string]string{
               description: PreferredNetworkInterfaceMultiQueue optionally enables
                 the vhost multiqueue feature for virtio interfaces.
               type: boolean
+            preferredPanicDeviceModel:
+              description: PreferredPanicDeviceModel optionally defines the preferred
+                panic device model to use with panic devices.
+              type: string
             preferredRng:
               description: PreferredRng optionally defines the preferred rng device
                 to be used.
@@ -9287,6 +9481,11 @@ var CRDsValidation map[string]string = map[string]string{
               description: PreferredTPM optionally defines the preferred TPM device
                 to be used.
               properties:
+                enabled:
+                  description: |-
+                    Enabled allows a user to explicitly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+                    Defaults to True
+                  type: boolean
                 persistent:
                   description: |-
                     Persistent indicates the state of the TPM device should be kept accross reboots
@@ -9583,13 +9782,18 @@ var CRDsValidation map[string]string = map[string]string{
                 Requires PreferredUseBios to be enabled.
               type: boolean
             preferredUseEfi:
-              description: PreferredUseEfi optionally enables EFI
+              description: |-
+                PreferredUseEfi optionally enables EFI
+
+                Deprecated: Will be removed with v1beta2 or v1
               type: boolean
             preferredUseSecureBoot:
               description: |-
                 PreferredUseSecureBoot optionally enables SecureBoot and the OVMF roms will be swapped for SecureBoot-enabled ones.
 
                 Requires PreferredUseEfi and PreferredSmm to be enabled.
+
+                Deprecated: Will be removed with v1beta2 or v1
               type: boolean
           type: object
         machine:
@@ -10993,9 +11197,12 @@ var CRDsValidation map[string]string = map[string]string{
                   pod.
                 properties:
                   name:
-                    description: Required.
+                    description: |-
+                      Name is this DNS resolver option's name.
+                      Required.
                     type: string
                   value:
+                    description: Value is this DNS resolver option's value.
                     type: string
                 type: object
               type: array
@@ -11306,7 +11513,11 @@ var CRDsValidation map[string]string = map[string]string{
                       cache:
                         description: |-
                           Cache specifies which kvm disk cache mode should be used.
-                          Supported values are: CacheNone, CacheWriteThrough.
+                          Supported values are:
+                          none: Guest I/O not cached on the host, but may be kept in a disk cache.
+                          writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
+                          writeback: Guest I/O cached on the host.
+                          Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                         type: string
                       cdrom:
                         description: Attach a volume as a cdrom to the vmi.
@@ -11425,11 +11636,23 @@ var CRDsValidation map[string]string = map[string]string{
                   description: Whether to attach a GPU device to the vmi.
                   items:
                     properties:
+                      claimName:
+                        description: |-
+                          ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                          device is allocated
+                        type: string
                       deviceName:
+                        description: DeviceName is the name of the device provisioned
+                          by device-plugins
                         type: string
                       name:
                         description: Name of the GPU device as exposed by a device
                           plugin
+                        type: string
+                      requestName:
+                        description: |-
+                          RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                          device is requested
                         type: string
                       tag:
                         description: If specified, the virtual network interface address
@@ -11458,7 +11681,6 @@ var CRDsValidation map[string]string = map[string]string{
                             type: object
                         type: object
                     required:
-                    - deviceName
                     - name
                     type: object
                   type: array
@@ -11467,18 +11689,27 @@ var CRDsValidation map[string]string = map[string]string{
                   description: Whether to attach a host device to the vmi.
                   items:
                     properties:
+                      claimName:
+                        description: |-
+                          ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                          device is allocated
+                        type: string
                       deviceName:
-                        description: DeviceName is the resource name of the host device
-                          exposed by a device plugin
+                        description: DeviceName is the name of the device provisioned
+                          by device-plugins
                         type: string
                       name:
+                        type: string
+                      requestName:
+                        description: |-
+                          RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                          device is requested
                         type: string
                       tag:
                         description: If specified, the virtual network interface address
                           and its tag will be provided to the guest via config drive
                         type: string
                     required:
-                    - deviceName
                     - name
                     type: object
                   type: array
@@ -11660,7 +11891,11 @@ var CRDsValidation map[string]string = map[string]string{
                       state:
                         description: |-
                           State represents the requested operational state of the interface.
-                          The (only) value supported is 'absent', expressing a request to remove the interface.
+                          The supported values are:
+                          'absent', expressing a request to remove the interface.
+                          'down', expressing a request to set the link down.
+                          'up', expressing a request to set the link up.
+                          Empty value functions as 'up'.
                         type: string
                       tag:
                         description: If specified, the virtual network interface address
@@ -11685,6 +11920,19 @@ var CRDsValidation map[string]string = map[string]string{
                     factors of the VirtualMachineInstance, like the number of guest
                     CPUs.
                   type: boolean
+                panicDevices:
+                  description: PanicDevices provides additional crash information
+                    when a guest crashes.
+                  items:
+                    properties:
+                      model:
+                        description: |-
+                          Model specifies what type of panic device is provided.
+                          The panic model used when this attribute is missing depends on the hypervisor and guest arch.
+                          One of: isa, hyperv, pvpanic.
+                        type: string
+                    type: object
+                  type: array
                 rng:
                   description: Whether to have random number generator from host
                   type: object
@@ -11706,6 +11954,11 @@ var CRDsValidation map[string]string = map[string]string{
                 tpm:
                   description: Whether to emulate a TPM device.
                   properties:
+                    enabled:
+                      description: |-
+                        Enabled allows a user to explicitly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+                        Defaults to True
+                      type: boolean
                     persistent:
                       description: |-
                         Persistent indicates the state of the TPM device should be kept accross reboots
@@ -11718,10 +11971,29 @@ var CRDsValidation map[string]string = map[string]string{
                     This is helpful for old machines like CentOS6 or RHEL6 which
                     do not understand virtio_non_transitional (virtio 1.0).
                   type: boolean
+                video:
+                  description: Video describes the video device configuration for
+                    the vmi.
+                  properties:
+                    type:
+                      description: |-
+                        Type specifies the video device type (e.g., virtio, vga, bochs, ramfb).
+                        If not specified, the default is architecture-dependent (VGA for BIOS-based VMs, Bochs for EFI-based VMs on AMD64; virtio for Arm and s390x).
+                      type: string
+                  type: object
                 watchdog:
                   description: Watchdog describes a watchdog device which can be added
                     to the vmi.
                   properties:
+                    diag288:
+                      description: diag288 watchdog device (specific to s390x architecture).
+                      properties:
+                        action:
+                          description: |-
+                            The action to take. Valid values are poweroff, reset, shutdown.
+                            Defaults to reset.
+                          type: string
+                      type: object
                     i6300esb:
                       description: i6300esb watchdog device.
                       properties:
@@ -11989,6 +12261,11 @@ var CRDsValidation map[string]string = map[string]string{
                 acpi:
                   description: Information that can be set in the ACPI table
                   properties:
+                    msdmNameRef:
+                      description: |-
+                        Similar to SlicNameRef, another ACPI entry that is used in more recent Windows versions.
+                        The above points to the spec of MSDM too.
+                      type: string
                     slicNameRef:
                       description: |-
                         SlicNameRef should match the volume name of a secret object. The data in the secret should
@@ -12071,11 +12348,20 @@ var CRDsValidation map[string]string = map[string]string{
                     Defaults to a random generated uid.
                   type: string
               type: object
+            ioThreads:
+              description: IOThreads specifies the IOThreads options.
+              properties:
+                supplementalPoolThreadCount:
+                  description: SupplementalPoolThreadCount specifies how many iothreads
+                    are allocated for the supplementalPool policy.
+                  format: int32
+                  type: integer
+              type: object
             ioThreadsPolicy:
               description: |-
                 Controls whether or not disks will share IOThreads.
                 Omitting IOThreadsPolicy disables use of IOThreads.
-                One of: shared, auto
+                One of: shared, auto, supplementalPool
               type: string
             launchSecurity:
               description: Launch Security setting of the vmi.
@@ -12188,7 +12474,7 @@ var CRDsValidation map[string]string = map[string]string{
             - "None": No action will be taken, according to the specified 'RunStrategy' the VirtualMachine will be restarted or shutdown.
             - "LiveMigrate": the VirtualMachineInstance will be migrated instead of being shutdown.
             - "LiveMigrateIfPossible": the same as "LiveMigrate" but only if the VirtualMachine is Live-Migratable, otherwise it will behave as "None".
-            - "External": the VirtualMachineInstance will be protected by a PDB and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
+            - "External": the VirtualMachineInstance will be protected and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
           type: string
         hostname:
           description: |-
@@ -12527,6 +12813,65 @@ var CRDsValidation map[string]string = map[string]string{
               format: int32
               type: integer
           type: object
+        resourceClaims:
+          description: |-
+            ResourceClaims define which ResourceClaims must be allocated
+            and reserved before the VMI, hence virt-launcher pod is allowed to start. The resources
+            will be made available to the domain which consumes them
+            by name.
+
+            This is an alpha field and requires enabling the
+            DynamicResourceAllocation feature gate in kubernetes
+             https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/
+            This field should only be configured if one of the feature-gates GPUsWithDRA or HostDevicesWithDRA is enabled.
+            This feature is in alpha.
+          items:
+            description: |-
+              PodResourceClaim references exactly one ResourceClaim, either directly
+              or by naming a ResourceClaimTemplate which is then turned into a ResourceClaim
+              for the pod.
+
+              It adds a name to it that uniquely identifies the ResourceClaim inside the Pod.
+              Containers that need access to the ResourceClaim reference it with this name.
+            properties:
+              name:
+                description: |-
+                  Name uniquely identifies this resource claim inside the pod.
+                  This must be a DNS_LABEL.
+                type: string
+              resourceClaimName:
+                description: |-
+                  ResourceClaimName is the name of a ResourceClaim object in the same
+                  namespace as this pod.
+
+                  Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                  be set.
+                type: string
+              resourceClaimTemplateName:
+                description: |-
+                  ResourceClaimTemplateName is the name of a ResourceClaimTemplate
+                  object in the same namespace as this pod.
+
+                  The template will be used to create a new ResourceClaim, which will
+                  be bound to this pod. When this pod is deleted, the ResourceClaim
+                  will also be deleted. The pod name and resource name, along with a
+                  generated component, will be used to form a unique name for the
+                  ResourceClaim, which will be recorded in pod.status.resourceClaimStatuses.
+
+                  This field is immutable and no changes will be made to the
+                  corresponding ResourceClaim by the control plane after creating the
+                  ResourceClaim.
+
+                  Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                  be set.
+                type: string
+            required:
+            - name
+            type: object
+          type: array
+          x-kubernetes-list-map-keys:
+          - name
+          x-kubernetes-list-type: map
         schedulerName:
           description: |-
             If specified, the VMI will be dispatched by specified scheduler.
@@ -12941,9 +13286,8 @@ var CRDsValidation map[string]string = map[string]string{
                       hotplugged and hotunplugged.
                     type: boolean
                   name:
-                    description: |-
-                      Name of both the DataVolume and the PVC in the same namespace.
-                      After PVC population the DataVolume is garbage collected by default.
+                    description: Name of both the DataVolume and the PVC in the same
+                      namespace.
                     type: string
                 required:
                 - name
@@ -13287,6 +13631,96 @@ var CRDsValidation map[string]string = map[string]string{
               format: int32
               type: integer
           type: object
+        deviceStatus:
+          description: |-
+            DeviceStatus reflects the state of devices requested in spec.domain.devices. This is an optional field available
+            only when DRA feature gate is enabled
+            This field will only be populated if one of the feature-gates GPUsWithDRA or HostDevicesWithDRA is enabled.
+            This feature is in alpha.
+          properties:
+            gpuStatuses:
+              description: GPUStatuses reflects the state of GPUs requested in spec.domain.devices.gpus
+              items:
+                properties:
+                  deviceResourceClaimStatus:
+                    description: DeviceResourceClaimStatus reflects the DRA related
+                      information for the device
+                    properties:
+                      attributes:
+                        description: |-
+                          Attributes are properties of the device that could be used by kubevirt and other copmonents to learn more
+                          about the device, like pciAddress or mdevUUID
+                        properties:
+                          mDevUUID:
+                            description: MDevUUID is the mediated device uuid of the
+                              allocated device
+                            type: string
+                          pciAddress:
+                            description: PCIAddress is the PCIe bus address of the
+                              allocated device
+                            type: string
+                        type: object
+                      name:
+                        description: Name is the name of actual device on the host
+                          provisioned by the driver as reflected in resourceclaim.status
+                        type: string
+                      resourceClaimName:
+                        description: ResourceClaimName is the name of the resource
+                          claims object used to provision this resource
+                        type: string
+                    type: object
+                  name:
+                    description: Name of the device as specified in spec.domain.devices.gpus.name
+                      or spec.domain.devices.hostDevices.name
+                    type: string
+                required:
+                - name
+                type: object
+              type: array
+              x-kubernetes-list-type: atomic
+            hostDeviceStatuses:
+              description: |-
+                HostDeviceStatuses reflects the state of GPUs requested in spec.domain.devices.hostDevices
+                DRA
+              items:
+                properties:
+                  deviceResourceClaimStatus:
+                    description: DeviceResourceClaimStatus reflects the DRA related
+                      information for the device
+                    properties:
+                      attributes:
+                        description: |-
+                          Attributes are properties of the device that could be used by kubevirt and other copmonents to learn more
+                          about the device, like pciAddress or mdevUUID
+                        properties:
+                          mDevUUID:
+                            description: MDevUUID is the mediated device uuid of the
+                              allocated device
+                            type: string
+                          pciAddress:
+                            description: PCIAddress is the PCIe bus address of the
+                              allocated device
+                            type: string
+                        type: object
+                      name:
+                        description: Name is the name of actual device on the host
+                          provisioned by the driver as reflected in resourceclaim.status
+                        type: string
+                      resourceClaimName:
+                        description: ResourceClaimName is the name of the resource
+                          claims object used to provision this resource
+                        type: string
+                    type: object
+                  name:
+                    description: Name of the device as specified in spec.domain.devices.gpus.name
+                      or spec.domain.devices.hostDevices.name
+                    type: string
+                required:
+                - name
+                type: object
+              type: array
+              x-kubernetes-list-type: atomic
+          type: object
         evacuationNodeName:
           description: |-
             EvacuationNodeName is used to track the eviction process of a VMI. It stores the name of the node that we want
@@ -13294,8 +13728,9 @@ var CRDsValidation map[string]string = map[string]string{
           type: string
         fsFreezeStatus:
           description: |-
-            FSFreezeStatus is the state of the fs of the guest
-            it can be either frozen or thawed
+            FSFreezeStatus indicates whether a freeze operation was requested for the guest filesystem.
+            It will be set to "frozen" if the request was made, or unset otherwise.
+            This does not reflect the actual state of the guest filesystem.
           type: string
         guestOSInfo:
           description: Guest OS Information
@@ -13346,6 +13781,10 @@ var CRDsValidation map[string]string = map[string]string{
                 items:
                   type: string
                 type: array
+              linkState:
+                description: 'LinkState Reports the current operational link state''.
+                  values: up, down.'
+                type: string
               mac:
                 description: Hardware address of a Virtual Machine interface
                 type: string
@@ -13582,6 +14021,13 @@ var CRDsValidation map[string]string = map[string]string{
                     If set to true, migrations will still start in pre-copy, but switch to post-copy when
                     CompletionTimeoutPerGiB triggers. Defaults to false
                   type: boolean
+                allowWorkloadDisruption:
+                  description: |-
+                    AllowWorkloadDisruption indicates that the migration shouldn't be
+                    canceled after acceptableCompletionTime is exceeded. Instead, if
+                    permitted, migration will be switched to post-copy or the VMI will be
+                    paused to allow the migration to complete
+                  type: boolean
                 bandwidthPerMigration:
                   anyOf:
                   - type: integer
@@ -13594,8 +14040,8 @@ var CRDsValidation map[string]string = map[string]string{
                 completionTimeoutPerGiB:
                   description: |-
                     CompletionTimeoutPerGiB is the maximum number of seconds per GiB a migration is allowed to take.
-                    If a live-migration takes longer to migrate than this value multiplied by the size of the VMI,
-                    the migration will be cancelled, unless AllowPostCopy is true. Defaults to 150
+                    If the timeout is reached, the migration will be either paused, switched
+                    to post-copy or cancelled depending on other settings. Defaults to 150
                   format: int64
                   type: integer
                 disableTLS:
@@ -13645,6 +14091,9 @@ var CRDsValidation map[string]string = map[string]string{
                     indicates the migration will be unsafe to the guest. Defaults to false
                   type: boolean
               type: object
+            migrationNetworkType:
+              description: The type of migration network, either 'pod' or 'migration'
+              type: string
             migrationPolicyName:
               description: Name of the migration policy. If string is empty, no policy
                 is matched
@@ -13666,6 +14115,50 @@ var CRDsValidation map[string]string = map[string]string{
               type: string
             sourcePod:
               type: string
+            sourceState:
+              description: SourceState contains migration state managed by the source
+                virt handler
+              properties:
+                domainName:
+                  description: The name of the domain on the source libvirt domain
+                  type: string
+                domainNamespace:
+                  description: Namespace used in the name of the source libvirt domain.
+                    Can be used to find and modify paths in the domain
+                  type: string
+                migrationUID:
+                  description: The Source VirtualMachineInstanceMigration object associated
+                    with this migration
+                  type: string
+                node:
+                  description: The source node that the VMI originated on
+                  type: string
+                nodeSelectors:
+                  additionalProperties:
+                    type: string
+                  description: Node selectors needed by the target to start the receiving
+                    pod.
+                  type: object
+                persistentStatePVCName:
+                  description: If the VMI being migrated uses persistent features
+                    (backend-storage), its source PVC name is saved here
+                  type: string
+                pod:
+                  description: The source pod that the VMI is originated on
+                  type: string
+                selinuxContext:
+                  description: SELinuxContext is the actual SELinux context of the
+                    pod
+                  type: string
+                syncAddress:
+                  description: The ip address/fqdn:port combination to use to synchronize
+                    the VMI with the target.
+                  type: string
+                virtualMachineInstanceUID:
+                  description: VirtualMachineInstanceUID is the UID of the target
+                    virtual machine instance
+                  type: string
+              type: object
             startTimestamp:
               description: The time the migration action began
               format: date-time
@@ -13714,6 +14207,77 @@ var CRDsValidation map[string]string = map[string]string{
             targetPod:
               description: The target pod that the VMI is moving to
               type: string
+            targetState:
+              description: TargetState contains migration state managed by the target
+                virt handler
+              properties:
+                attachmentPodUID:
+                  description: The UID of the target attachment pod for hotplug volumes
+                  type: string
+                cpuSet:
+                  description: |-
+                    If the VMI requires dedicated CPUs, this field will
+                    hold the dedicated CPU set on the target node
+                  items:
+                    type: integer
+                  type: array
+                  x-kubernetes-list-type: atomic
+                directMigrationNodePorts:
+                  additionalProperties:
+                    type: integer
+                  description: The list of ports opened for live migration on the
+                    destination node
+                  type: object
+                domainDetected:
+                  description: The Target Node has seen the Domain Start Event
+                  type: boolean
+                domainName:
+                  description: The name of the domain on the source libvirt domain
+                  type: string
+                domainNamespace:
+                  description: Namespace used in the name of the source libvirt domain.
+                    Can be used to find and modify paths in the domain
+                  type: string
+                domainReadyTimestamp:
+                  description: The timestamp at which the target node detects the
+                    domain is active
+                  format: date-time
+                  type: string
+                migrationUID:
+                  description: The Source VirtualMachineInstanceMigration object associated
+                    with this migration
+                  type: string
+                node:
+                  description: The source node that the VMI originated on
+                  type: string
+                nodeAddress:
+                  description: The address of the target node to use for the migration
+                  type: string
+                nodeTopology:
+                  description: |-
+                    If the VMI requires dedicated CPUs, this field will
+                    hold the numa topology on the target node
+                  type: string
+                persistentStatePVCName:
+                  description: If the VMI being migrated uses persistent features
+                    (backend-storage), its source PVC name is saved here
+                  type: string
+                pod:
+                  description: The source pod that the VMI is originated on
+                  type: string
+                selinuxContext:
+                  description: SELinuxContext is the actual SELinux context of the
+                    pod
+                  type: string
+                syncAddress:
+                  description: The ip address/fqdn:port combination to use to synchronize
+                    the VMI with the target.
+                  type: string
+                virtualMachineInstanceUID:
+                  description: VirtualMachineInstanceUID is the UID of the target
+                    virtual machine instance
+                  type: string
+              type: object
           type: object
         migrationTransport:
           description: This represents the migration transport
@@ -13933,6 +14497,41 @@ var CRDsValidation map[string]string = map[string]string{
       type: object
     spec:
       properties:
+        addedNodeSelector:
+          additionalProperties:
+            type: string
+          description: |-
+            AddedNodeSelector is an additional selector that can be used to
+            complement a NodeSelector or NodeAffinity as set on the VM
+            to restrict the set of allowed target nodes for a migration.
+            In case of key collisions, values set on the VM objects
+            are going to be preserved to ensure that addedNodeSelector
+            can only restrict but not bypass constraints already set on the VM object.
+          type: object
+        receive:
+          description: If receieve is specified, this VirtualMachineInstanceMigration
+            will be considered the target
+          properties:
+            migrationID:
+              description: A unique identifier to identify this migration.
+              type: string
+          required:
+          - migrationID
+          type: object
+        sendTo:
+          description: If sendTo is specified, this VirtualMachineInstanceMigration
+            will be considered the source
+          properties:
+            connectURL:
+              description: The synchronization controller URL to connect to.
+              type: string
+            migrationID:
+              description: A unique identifier to identify this migration.
+              type: string
+          required:
+          - connectURL
+          - migrationID
+          type: object
         vmiName:
           description: The name of the VMI to perform the migration on. VMI must exist
             in the migration objects namespace
@@ -14004,6 +14603,13 @@ var CRDsValidation map[string]string = map[string]string{
                     If set to true, migrations will still start in pre-copy, but switch to post-copy when
                     CompletionTimeoutPerGiB triggers. Defaults to false
                   type: boolean
+                allowWorkloadDisruption:
+                  description: |-
+                    AllowWorkloadDisruption indicates that the migration shouldn't be
+                    canceled after acceptableCompletionTime is exceeded. Instead, if
+                    permitted, migration will be switched to post-copy or the VMI will be
+                    paused to allow the migration to complete
+                  type: boolean
                 bandwidthPerMigration:
                   anyOf:
                   - type: integer
@@ -14016,8 +14622,8 @@ var CRDsValidation map[string]string = map[string]string{
                 completionTimeoutPerGiB:
                   description: |-
                     CompletionTimeoutPerGiB is the maximum number of seconds per GiB a migration is allowed to take.
-                    If a live-migration takes longer to migrate than this value multiplied by the size of the VMI,
-                    the migration will be cancelled, unless AllowPostCopy is true. Defaults to 150
+                    If the timeout is reached, the migration will be either paused, switched
+                    to post-copy or cancelled depending on other settings. Defaults to 150
                   format: int64
                   type: integer
                 disableTLS:
@@ -14067,6 +14673,9 @@ var CRDsValidation map[string]string = map[string]string{
                     indicates the migration will be unsafe to the guest. Defaults to false
                   type: boolean
               type: object
+            migrationNetworkType:
+              description: The type of migration network, either 'pod' or 'migration'
+              type: string
             migrationPolicyName:
               description: Name of the migration policy. If string is empty, no policy
                 is matched
@@ -14088,6 +14697,50 @@ var CRDsValidation map[string]string = map[string]string{
               type: string
             sourcePod:
               type: string
+            sourceState:
+              description: SourceState contains migration state managed by the source
+                virt handler
+              properties:
+                domainName:
+                  description: The name of the domain on the source libvirt domain
+                  type: string
+                domainNamespace:
+                  description: Namespace used in the name of the source libvirt domain.
+                    Can be used to find and modify paths in the domain
+                  type: string
+                migrationUID:
+                  description: The Source VirtualMachineInstanceMigration object associated
+                    with this migration
+                  type: string
+                node:
+                  description: The source node that the VMI originated on
+                  type: string
+                nodeSelectors:
+                  additionalProperties:
+                    type: string
+                  description: Node selectors needed by the target to start the receiving
+                    pod.
+                  type: object
+                persistentStatePVCName:
+                  description: If the VMI being migrated uses persistent features
+                    (backend-storage), its source PVC name is saved here
+                  type: string
+                pod:
+                  description: The source pod that the VMI is originated on
+                  type: string
+                selinuxContext:
+                  description: SELinuxContext is the actual SELinux context of the
+                    pod
+                  type: string
+                syncAddress:
+                  description: The ip address/fqdn:port combination to use to synchronize
+                    the VMI with the target.
+                  type: string
+                virtualMachineInstanceUID:
+                  description: VirtualMachineInstanceUID is the UID of the target
+                    virtual machine instance
+                  type: string
+              type: object
             startTimestamp:
               description: The time the migration action began
               format: date-time
@@ -14136,6 +14789,77 @@ var CRDsValidation map[string]string = map[string]string{
             targetPod:
               description: The target pod that the VMI is moving to
               type: string
+            targetState:
+              description: TargetState contains migration state managed by the target
+                virt handler
+              properties:
+                attachmentPodUID:
+                  description: The UID of the target attachment pod for hotplug volumes
+                  type: string
+                cpuSet:
+                  description: |-
+                    If the VMI requires dedicated CPUs, this field will
+                    hold the dedicated CPU set on the target node
+                  items:
+                    type: integer
+                  type: array
+                  x-kubernetes-list-type: atomic
+                directMigrationNodePorts:
+                  additionalProperties:
+                    type: integer
+                  description: The list of ports opened for live migration on the
+                    destination node
+                  type: object
+                domainDetected:
+                  description: The Target Node has seen the Domain Start Event
+                  type: boolean
+                domainName:
+                  description: The name of the domain on the source libvirt domain
+                  type: string
+                domainNamespace:
+                  description: Namespace used in the name of the source libvirt domain.
+                    Can be used to find and modify paths in the domain
+                  type: string
+                domainReadyTimestamp:
+                  description: The timestamp at which the target node detects the
+                    domain is active
+                  format: date-time
+                  type: string
+                migrationUID:
+                  description: The Source VirtualMachineInstanceMigration object associated
+                    with this migration
+                  type: string
+                node:
+                  description: The source node that the VMI originated on
+                  type: string
+                nodeAddress:
+                  description: The address of the target node to use for the migration
+                  type: string
+                nodeTopology:
+                  description: |-
+                    If the VMI requires dedicated CPUs, this field will
+                    hold the numa topology on the target node
+                  type: string
+                persistentStatePVCName:
+                  description: If the VMI being migrated uses persistent features
+                    (backend-storage), its source PVC name is saved here
+                  type: string
+                pod:
+                  description: The source pod that the VMI is originated on
+                  type: string
+                selinuxContext:
+                  description: SELinuxContext is the actual SELinux context of the
+                    pod
+                  type: string
+                syncAddress:
+                  description: The ip address/fqdn:port combination to use to synchronize
+                    the VMI with the target.
+                  type: string
+                virtualMachineInstanceUID:
+                  description: VirtualMachineInstanceUID is the UID of the target
+                    virtual machine instance
+                  type: string
+              type: object
           type: object
         phase:
           description: VirtualMachineInstanceMigrationPhase is a label for the condition
@@ -14159,6 +14883,14 @@ var CRDsValidation map[string]string = map[string]string{
                 format: date-time
                 type: string
             type: object
+          type: array
+          x-kubernetes-list-type: atomic
+        synchronizationAddresses:
+          description: |-
+            The synchronization addresses one can use to connect to the synchronization controller, includes the port, if multiple
+            addresses are available, the first one is reported in the synchronizationAddress field.
+          items:
+            type: string
           type: array
           x-kubernetes-list-type: atomic
       type: object
@@ -14480,7 +15212,11 @@ var CRDsValidation map[string]string = map[string]string{
                       cache:
                         description: |-
                           Cache specifies which kvm disk cache mode should be used.
-                          Supported values are: CacheNone, CacheWriteThrough.
+                          Supported values are:
+                          none: Guest I/O not cached on the host, but may be kept in a disk cache.
+                          writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
+                          writeback: Guest I/O cached on the host.
+                          Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                         type: string
                       cdrom:
                         description: Attach a volume as a cdrom to the vmi.
@@ -14599,11 +15335,23 @@ var CRDsValidation map[string]string = map[string]string{
                   description: Whether to attach a GPU device to the vmi.
                   items:
                     properties:
+                      claimName:
+                        description: |-
+                          ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                          device is allocated
+                        type: string
                       deviceName:
+                        description: DeviceName is the name of the device provisioned
+                          by device-plugins
                         type: string
                       name:
                         description: Name of the GPU device as exposed by a device
                           plugin
+                        type: string
+                      requestName:
+                        description: |-
+                          RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                          device is requested
                         type: string
                       tag:
                         description: If specified, the virtual network interface address
@@ -14632,7 +15380,6 @@ var CRDsValidation map[string]string = map[string]string{
                             type: object
                         type: object
                     required:
-                    - deviceName
                     - name
                     type: object
                   type: array
@@ -14641,18 +15388,27 @@ var CRDsValidation map[string]string = map[string]string{
                   description: Whether to attach a host device to the vmi.
                   items:
                     properties:
+                      claimName:
+                        description: |-
+                          ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                          device is allocated
+                        type: string
                       deviceName:
-                        description: DeviceName is the resource name of the host device
-                          exposed by a device plugin
+                        description: DeviceName is the name of the device provisioned
+                          by device-plugins
                         type: string
                       name:
+                        type: string
+                      requestName:
+                        description: |-
+                          RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                          device is requested
                         type: string
                       tag:
                         description: If specified, the virtual network interface address
                           and its tag will be provided to the guest via config drive
                         type: string
                     required:
-                    - deviceName
                     - name
                     type: object
                   type: array
@@ -14834,7 +15590,11 @@ var CRDsValidation map[string]string = map[string]string{
                       state:
                         description: |-
                           State represents the requested operational state of the interface.
-                          The (only) value supported is 'absent', expressing a request to remove the interface.
+                          The supported values are:
+                          'absent', expressing a request to remove the interface.
+                          'down', expressing a request to set the link down.
+                          'up', expressing a request to set the link up.
+                          Empty value functions as 'up'.
                         type: string
                       tag:
                         description: If specified, the virtual network interface address
@@ -14859,6 +15619,19 @@ var CRDsValidation map[string]string = map[string]string{
                     factors of the VirtualMachineInstance, like the number of guest
                     CPUs.
                   type: boolean
+                panicDevices:
+                  description: PanicDevices provides additional crash information
+                    when a guest crashes.
+                  items:
+                    properties:
+                      model:
+                        description: |-
+                          Model specifies what type of panic device is provided.
+                          The panic model used when this attribute is missing depends on the hypervisor and guest arch.
+                          One of: isa, hyperv, pvpanic.
+                        type: string
+                    type: object
+                  type: array
                 rng:
                   description: Whether to have random number generator from host
                   type: object
@@ -14880,6 +15653,11 @@ var CRDsValidation map[string]string = map[string]string{
                 tpm:
                   description: Whether to emulate a TPM device.
                   properties:
+                    enabled:
+                      description: |-
+                        Enabled allows a user to explicitly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+                        Defaults to True
+                      type: boolean
                     persistent:
                       description: |-
                         Persistent indicates the state of the TPM device should be kept accross reboots
@@ -14892,10 +15670,29 @@ var CRDsValidation map[string]string = map[string]string{
                     This is helpful for old machines like CentOS6 or RHEL6 which
                     do not understand virtio_non_transitional (virtio 1.0).
                   type: boolean
+                video:
+                  description: Video describes the video device configuration for
+                    the vmi.
+                  properties:
+                    type:
+                      description: |-
+                        Type specifies the video device type (e.g., virtio, vga, bochs, ramfb).
+                        If not specified, the default is architecture-dependent (VGA for BIOS-based VMs, Bochs for EFI-based VMs on AMD64; virtio for Arm and s390x).
+                      type: string
+                  type: object
                 watchdog:
                   description: Watchdog describes a watchdog device which can be added
                     to the vmi.
                   properties:
+                    diag288:
+                      description: diag288 watchdog device (specific to s390x architecture).
+                      properties:
+                        action:
+                          description: |-
+                            The action to take. Valid values are poweroff, reset, shutdown.
+                            Defaults to reset.
+                          type: string
+                      type: object
                     i6300esb:
                       description: i6300esb watchdog device.
                       properties:
@@ -15163,6 +15960,11 @@ var CRDsValidation map[string]string = map[string]string{
                 acpi:
                   description: Information that can be set in the ACPI table
                   properties:
+                    msdmNameRef:
+                      description: |-
+                        Similar to SlicNameRef, another ACPI entry that is used in more recent Windows versions.
+                        The above points to the spec of MSDM too.
+                      type: string
                     slicNameRef:
                       description: |-
                         SlicNameRef should match the volume name of a secret object. The data in the secret should
@@ -15245,11 +16047,20 @@ var CRDsValidation map[string]string = map[string]string{
                     Defaults to a random generated uid.
                   type: string
               type: object
+            ioThreads:
+              description: IOThreads specifies the IOThreads options.
+              properties:
+                supplementalPoolThreadCount:
+                  description: SupplementalPoolThreadCount specifies how many iothreads
+                    are allocated for the supplementalPool policy.
+                  format: int32
+                  type: integer
+              type: object
             ioThreadsPolicy:
               description: |-
                 Controls whether or not disks will share IOThreads.
                 Omitting IOThreadsPolicy disables use of IOThreads.
-                One of: shared, auto
+                One of: shared, auto, supplementalPool
               type: string
             launchSecurity:
               description: Launch Security setting of the vmi.
@@ -16562,9 +17373,12 @@ var CRDsValidation map[string]string = map[string]string{
                           of a pod.
                         properties:
                           name:
-                            description: Required.
+                            description: |-
+                              Name is this DNS resolver option's name.
+                              Required.
                             type: string
                           value:
+                            description: Value is this DNS resolver option's value.
                             type: string
                         type: object
                       type: array
@@ -16882,7 +17696,11 @@ var CRDsValidation map[string]string = map[string]string{
                               cache:
                                 description: |-
                                   Cache specifies which kvm disk cache mode should be used.
-                                  Supported values are: CacheNone, CacheWriteThrough.
+                                  Supported values are:
+                                  none: Guest I/O not cached on the host, but may be kept in a disk cache.
+                                  writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
+                                  writeback: Guest I/O cached on the host.
+                                  Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                 type: string
                               cdrom:
                                 description: Attach a volume as a cdrom to the vmi.
@@ -17002,11 +17820,23 @@ var CRDsValidation map[string]string = map[string]string{
                           description: Whether to attach a GPU device to the vmi.
                           items:
                             properties:
+                              claimName:
+                                description: |-
+                                  ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                                  device is allocated
+                                type: string
                               deviceName:
+                                description: DeviceName is the name of the device
+                                  provisioned by device-plugins
                                 type: string
                               name:
                                 description: Name of the GPU device as exposed by
                                   a device plugin
+                                type: string
+                              requestName:
+                                description: |-
+                                  RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                                  device is requested
                                 type: string
                               tag:
                                 description: If specified, the virtual network interface
@@ -17036,7 +17866,6 @@ var CRDsValidation map[string]string = map[string]string{
                                     type: object
                                 type: object
                             required:
-                            - deviceName
                             - name
                             type: object
                           type: array
@@ -17045,11 +17874,21 @@ var CRDsValidation map[string]string = map[string]string{
                           description: Whether to attach a host device to the vmi.
                           items:
                             properties:
+                              claimName:
+                                description: |-
+                                  ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                                  device is allocated
+                                type: string
                               deviceName:
-                                description: DeviceName is the resource name of the
-                                  host device exposed by a device plugin
+                                description: DeviceName is the name of the device
+                                  provisioned by device-plugins
                                 type: string
                               name:
+                                type: string
+                              requestName:
+                                description: |-
+                                  RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                                  device is requested
                                 type: string
                               tag:
                                 description: If specified, the virtual network interface
@@ -17057,7 +17896,6 @@ var CRDsValidation map[string]string = map[string]string{
                                   via config drive
                                 type: string
                             required:
-                            - deviceName
                             - name
                             type: object
                           type: array
@@ -17239,7 +18077,11 @@ var CRDsValidation map[string]string = map[string]string{
                               state:
                                 description: |-
                                   State represents the requested operational state of the interface.
-                                  The (only) value supported is 'absent', expressing a request to remove the interface.
+                                  The supported values are:
+                                  'absent', expressing a request to remove the interface.
+                                  'down', expressing a request to set the link down.
+                                  'up', expressing a request to set the link up.
+                                  Empty value functions as 'up'.
                                 type: string
                               tag:
                                 description: If specified, the virtual network interface
@@ -17265,6 +18107,19 @@ var CRDsValidation map[string]string = map[string]string{
                             depends on additional factors of the VirtualMachineInstance,
                             like the number of guest CPUs.
                           type: boolean
+                        panicDevices:
+                          description: PanicDevices provides additional crash information
+                            when a guest crashes.
+                          items:
+                            properties:
+                              model:
+                                description: |-
+                                  Model specifies what type of panic device is provided.
+                                  The panic model used when this attribute is missing depends on the hypervisor and guest arch.
+                                  One of: isa, hyperv, pvpanic.
+                                type: string
+                            type: object
+                          type: array
                         rng:
                           description: Whether to have random number generator from
                             host
@@ -17287,6 +18142,11 @@ var CRDsValidation map[string]string = map[string]string{
                         tpm:
                           description: Whether to emulate a TPM device.
                           properties:
+                            enabled:
+                              description: |-
+                                Enabled allows a user to explicitly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+                                Defaults to True
+                              type: boolean
                             persistent:
                               description: |-
                                 Persistent indicates the state of the TPM device should be kept accross reboots
@@ -17299,10 +18159,30 @@ var CRDsValidation map[string]string = map[string]string{
                             This is helpful for old machines like CentOS6 or RHEL6 which
                             do not understand virtio_non_transitional (virtio 1.0).
                           type: boolean
+                        video:
+                          description: Video describes the video device configuration
+                            for the vmi.
+                          properties:
+                            type:
+                              description: |-
+                                Type specifies the video device type (e.g., virtio, vga, bochs, ramfb).
+                                If not specified, the default is architecture-dependent (VGA for BIOS-based VMs, Bochs for EFI-based VMs on AMD64; virtio for Arm and s390x).
+                              type: string
+                          type: object
                         watchdog:
                           description: Watchdog describes a watchdog device which
                             can be added to the vmi.
                           properties:
+                            diag288:
+                              description: diag288 watchdog device (specific to s390x
+                                architecture).
+                              properties:
+                                action:
+                                  description: |-
+                                    The action to take. Valid values are poweroff, reset, shutdown.
+                                    Defaults to reset.
+                                  type: string
+                              type: object
                             i6300esb:
                               description: i6300esb watchdog device.
                               properties:
@@ -17572,6 +18452,11 @@ var CRDsValidation map[string]string = map[string]string{
                         acpi:
                           description: Information that can be set in the ACPI table
                           properties:
+                            msdmNameRef:
+                              description: |-
+                                Similar to SlicNameRef, another ACPI entry that is used in more recent Windows versions.
+                                The above points to the spec of MSDM too.
+                              type: string
                             slicNameRef:
                               description: |-
                                 SlicNameRef should match the volume name of a secret object. The data in the secret should
@@ -17657,11 +18542,20 @@ var CRDsValidation map[string]string = map[string]string{
                             Defaults to a random generated uid.
                           type: string
                       type: object
+                    ioThreads:
+                      description: IOThreads specifies the IOThreads options.
+                      properties:
+                        supplementalPoolThreadCount:
+                          description: SupplementalPoolThreadCount specifies how many
+                            iothreads are allocated for the supplementalPool policy.
+                          format: int32
+                          type: integer
+                      type: object
                     ioThreadsPolicy:
                       description: |-
                         Controls whether or not disks will share IOThreads.
                         Omitting IOThreadsPolicy disables use of IOThreads.
-                        One of: shared, auto
+                        One of: shared, auto, supplementalPool
                       type: string
                     launchSecurity:
                       description: Launch Security setting of the vmi.
@@ -17776,7 +18670,7 @@ var CRDsValidation map[string]string = map[string]string{
                     - "None": No action will be taken, according to the specified 'RunStrategy' the VirtualMachine will be restarted or shutdown.
                     - "LiveMigrate": the VirtualMachineInstance will be migrated instead of being shutdown.
                     - "LiveMigrateIfPossible": the same as "LiveMigrate" but only if the VirtualMachine is Live-Migratable, otherwise it will behave as "None".
-                    - "External": the VirtualMachineInstance will be protected by a PDB and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
+                    - "External": the VirtualMachineInstance will be protected and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
                   type: string
                 hostname:
                   description: |-
@@ -18116,6 +19010,65 @@ var CRDsValidation map[string]string = map[string]string{
                       format: int32
                       type: integer
                   type: object
+                resourceClaims:
+                  description: |-
+                    ResourceClaims define which ResourceClaims must be allocated
+                    and reserved before the VMI, hence virt-launcher pod is allowed to start. The resources
+                    will be made available to the domain which consumes them
+                    by name.
+
+                    This is an alpha field and requires enabling the
+                    DynamicResourceAllocation feature gate in kubernetes
+                     https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/
+                    This field should only be configured if one of the feature-gates GPUsWithDRA or HostDevicesWithDRA is enabled.
+                    This feature is in alpha.
+                  items:
+                    description: |-
+                      PodResourceClaim references exactly one ResourceClaim, either directly
+                      or by naming a ResourceClaimTemplate which is then turned into a ResourceClaim
+                      for the pod.
+
+                      It adds a name to it that uniquely identifies the ResourceClaim inside the Pod.
+                      Containers that need access to the ResourceClaim reference it with this name.
+                    properties:
+                      name:
+                        description: |-
+                          Name uniquely identifies this resource claim inside the pod.
+                          This must be a DNS_LABEL.
+                        type: string
+                      resourceClaimName:
+                        description: |-
+                          ResourceClaimName is the name of a ResourceClaim object in the same
+                          namespace as this pod.
+
+                          Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                          be set.
+                        type: string
+                      resourceClaimTemplateName:
+                        description: |-
+                          ResourceClaimTemplateName is the name of a ResourceClaimTemplate
+                          object in the same namespace as this pod.
+
+                          The template will be used to create a new ResourceClaim, which will
+                          be bound to this pod. When this pod is deleted, the ResourceClaim
+                          will also be deleted. The pod name and resource name, along with a
+                          generated component, will be used to form a unique name for the
+                          ResourceClaim, which will be recorded in pod.status.resourceClaimStatuses.
+
+                          This field is immutable and no changes will be made to the
+                          corresponding ResourceClaim by the control plane after creating the
+                          ResourceClaim.
+
+                          Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                          be set.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                  - name
+                  x-kubernetes-list-type: map
                 schedulerName:
                   description: |-
                     If specified, the VMI will be dispatched by specified scheduler.
@@ -18535,9 +19488,8 @@ var CRDsValidation map[string]string = map[string]string{
                               can be hotplugged and hotunplugged.
                             type: boolean
                           name:
-                            description: |-
-                              Name of both the DataVolume and the PVC in the same namespace.
-                              After PVC population the DataVolume is garbage collected by default.
+                            description: Name of both the DataVolume and the PVC in
+                              the same namespace.
                             type: string
                         required:
                         - name
@@ -18963,10 +19915,21 @@ var CRDsValidation map[string]string = map[string]string{
           description: Optionally defines any GPU devices associated with the instancetype.
           items:
             properties:
+              claimName:
+                description: |-
+                  ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                  device is allocated
+                type: string
               deviceName:
+                description: DeviceName is the name of the device provisioned by device-plugins
                 type: string
               name:
                 description: Name of the GPU device as exposed by a device plugin
+                type: string
+              requestName:
+                description: |-
+                  RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                  device is requested
                 type: string
               tag:
                 description: If specified, the virtual network interface address and
@@ -18995,7 +19958,6 @@ var CRDsValidation map[string]string = map[string]string{
                     type: object
                 type: object
             required:
-            - deviceName
             - name
             type: object
           type: array
@@ -19004,18 +19966,26 @@ var CRDsValidation map[string]string = map[string]string{
           description: Optionally defines any HostDevices associated with the instancetype.
           items:
             properties:
+              claimName:
+                description: |-
+                  ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                  device is allocated
+                type: string
               deviceName:
-                description: DeviceName is the resource name of the host device exposed
-                  by a device plugin
+                description: DeviceName is the name of the device provisioned by device-plugins
                 type: string
               name:
+                type: string
+              requestName:
+                description: |-
+                  RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                  device is requested
                 type: string
               tag:
                 description: If specified, the virtual network interface address and
                   its tag will be provided to the guest via config drive
                 type: string
             required:
-            - deviceName
             - name
             type: object
           type: array
@@ -19142,6 +20112,22 @@ var CRDsValidation map[string]string = map[string]string{
       type: object
     spec:
       properties:
+        maxUnavailable:
+          anyOf:
+          - type: integer
+          - type: string
+          description: (Defaults to 100%) Integer or string pointer, that when set
+            represents either a percentage or number of VMs in a pool that can be
+            unavailable (ready condition false) at a time during automated update.
+          x-kubernetes-int-or-string: true
+        nameGeneration:
+          description: Options for the name generation in a pool.
+          properties:
+            appendIndexToConfigMapRefs:
+              type: boolean
+            appendIndexToSecretRefs:
+              type: boolean
+          type: object
         paused:
           description: Indicates that the pool is paused.
           type: boolean
@@ -19151,6 +20137,28 @@ var CRDsValidation map[string]string = map[string]string{
             zero and not specified. Defaults to 1.
           format: int32
           type: integer
+        scaleInStrategy:
+          description: ScaleInStrategy specifies how the VMPool controller manages
+            scaling in VMs within a VMPool
+          properties:
+            proactive:
+              description: Proactive scale-in by forcing VMs to shutdown during scale-in
+                (Default)
+              properties:
+                selectionPolicy:
+                  description: |-
+                    SelectionPolicy defines the priority in which VM instances are selected for proactive scale-in
+                    Defaults to "Random" base policy when no SelectionPolicy is configured
+                  properties:
+                    basePolicy:
+                      description: BasePolicy is a catch-all policy [Random|DescendingOrder]
+                      enum:
+                      - Random
+                      - DescendingOrder
+                      type: string
+                  type: object
+              type: object
+          type: object
         selector:
           description: |-
             Label selector for pods. Existing Poolss whose pods are
@@ -19763,38 +20771,6 @@ var CRDsValidation map[string]string = map[string]string{
                                   Resources represents the minimum resources the volume should have.
                                   More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
                                 properties:
-                                  claims:
-                                    description: |-
-                                      Claims lists the names of resources, defined in spec.resourceClaims,
-                                      that are used by this container.
-
-                                      This is an alpha field and requires enabling the
-                                      DynamicResourceAllocation feature gate.
-
-                                      This field is immutable. It can only be set for containers.
-                                    items:
-                                      description: ResourceClaim references one entry
-                                        in PodSpec.ResourceClaims.
-                                      properties:
-                                        name:
-                                          description: |-
-                                            Name must match the name of one entry in pod.spec.resourceClaims of
-                                            the Pod where this field is used. It makes that resource available
-                                            inside a container.
-                                          type: string
-                                        request:
-                                          description: |-
-                                            Request is the name chosen for a request in the referenced claim.
-                                            If empty, everything from the claim is made available, otherwise
-                                            only the result of this request.
-                                          type: string
-                                      required:
-                                      - name
-                                      type: object
-                                    type: array
-                                    x-kubernetes-list-map-keys:
-                                    - name
-                                    x-kubernetes-list-type: map
                                   limits:
                                     additionalProperties:
                                       anyOf:
@@ -21053,9 +22029,13 @@ var CRDsValidation map[string]string = map[string]string{
                                   options of a pod.
                                 properties:
                                   name:
-                                    description: Required.
+                                    description: |-
+                                      Name is this DNS resolver option's name.
+                                      Required.
                                     type: string
                                   value:
+                                    description: Value is this DNS resolver option's
+                                      value.
                                     type: string
                                 type: object
                               type: array
@@ -21378,7 +22358,11 @@ var CRDsValidation map[string]string = map[string]string{
                                       cache:
                                         description: |-
                                           Cache specifies which kvm disk cache mode should be used.
-                                          Supported values are: CacheNone, CacheWriteThrough.
+                                          Supported values are:
+                                          none: Guest I/O not cached on the host, but may be kept in a disk cache.
+                                          writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
+                                          writeback: Guest I/O cached on the host.
+                                          Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                         type: string
                                       cdrom:
                                         description: Attach a volume as a cdrom to
@@ -21505,11 +22489,23 @@ var CRDsValidation map[string]string = map[string]string{
                                     vmi.
                                   items:
                                     properties:
+                                      claimName:
+                                        description: |-
+                                          ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                                          device is allocated
+                                        type: string
                                       deviceName:
+                                        description: DeviceName is the name of the
+                                          device provisioned by device-plugins
                                         type: string
                                       name:
                                         description: Name of the GPU device as exposed
                                           by a device plugin
+                                        type: string
+                                      requestName:
+                                        description: |-
+                                          RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                                          device is requested
                                         type: string
                                       tag:
                                         description: If specified, the virtual network
@@ -21539,7 +22535,6 @@ var CRDsValidation map[string]string = map[string]string{
                                             type: object
                                         type: object
                                     required:
-                                    - deviceName
                                     - name
                                     type: object
                                   type: array
@@ -21549,11 +22544,21 @@ var CRDsValidation map[string]string = map[string]string{
                                     the vmi.
                                   items:
                                     properties:
+                                      claimName:
+                                        description: |-
+                                          ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                                          device is allocated
+                                        type: string
                                       deviceName:
-                                        description: DeviceName is the resource name
-                                          of the host device exposed by a device plugin
+                                        description: DeviceName is the name of the
+                                          device provisioned by device-plugins
                                         type: string
                                       name:
+                                        type: string
+                                      requestName:
+                                        description: |-
+                                          RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                                          device is requested
                                         type: string
                                       tag:
                                         description: If specified, the virtual network
@@ -21561,7 +22566,6 @@ var CRDsValidation map[string]string = map[string]string{
                                           to the guest via config drive
                                         type: string
                                     required:
-                                    - deviceName
                                     - name
                                     type: object
                                   type: array
@@ -21749,7 +22753,11 @@ var CRDsValidation map[string]string = map[string]string{
                                       state:
                                         description: |-
                                           State represents the requested operational state of the interface.
-                                          The (only) value supported is 'absent', expressing a request to remove the interface.
+                                          The supported values are:
+                                          'absent', expressing a request to remove the interface.
+                                          'down', expressing a request to set the link down.
+                                          'up', expressing a request to set the link up.
+                                          Empty value functions as 'up'.
                                         type: string
                                       tag:
                                         description: If specified, the virtual network
@@ -21776,6 +22784,19 @@ var CRDsValidation map[string]string = map[string]string{
                                     factors of the VirtualMachineInstance, like the
                                     number of guest CPUs.
                                   type: boolean
+                                panicDevices:
+                                  description: PanicDevices provides additional crash
+                                    information when a guest crashes.
+                                  items:
+                                    properties:
+                                      model:
+                                        description: |-
+                                          Model specifies what type of panic device is provided.
+                                          The panic model used when this attribute is missing depends on the hypervisor and guest arch.
+                                          One of: isa, hyperv, pvpanic.
+                                        type: string
+                                    type: object
+                                  type: array
                                 rng:
                                   description: Whether to have random number generator
                                     from host
@@ -21799,6 +22820,11 @@ var CRDsValidation map[string]string = map[string]string{
                                 tpm:
                                   description: Whether to emulate a TPM device.
                                   properties:
+                                    enabled:
+                                      description: |-
+                                        Enabled allows a user to explicitly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+                                        Defaults to True
+                                      type: boolean
                                     persistent:
                                       description: |-
                                         Persistent indicates the state of the TPM device should be kept accross reboots
@@ -21811,10 +22837,30 @@ var CRDsValidation map[string]string = map[string]string{
                                     This is helpful for old machines like CentOS6 or RHEL6 which
                                     do not understand virtio_non_transitional (virtio 1.0).
                                   type: boolean
+                                video:
+                                  description: Video describes the video device configuration
+                                    for the vmi.
+                                  properties:
+                                    type:
+                                      description: |-
+                                        Type specifies the video device type (e.g., virtio, vga, bochs, ramfb).
+                                        If not specified, the default is architecture-dependent (VGA for BIOS-based VMs, Bochs for EFI-based VMs on AMD64; virtio for Arm and s390x).
+                                      type: string
+                                  type: object
                                 watchdog:
                                   description: Watchdog describes a watchdog device
                                     which can be added to the vmi.
                                   properties:
+                                    diag288:
+                                      description: diag288 watchdog device (specific
+                                        to s390x architecture).
+                                      properties:
+                                        action:
+                                          description: |-
+                                            The action to take. Valid values are poweroff, reset, shutdown.
+                                            Defaults to reset.
+                                          type: string
+                                      type: object
                                     i6300esb:
                                       description: i6300esb watchdog device.
                                       properties:
@@ -22085,6 +23131,11 @@ var CRDsValidation map[string]string = map[string]string{
                                   description: Information that can be set in the
                                     ACPI table
                                   properties:
+                                    msdmNameRef:
+                                      description: |-
+                                        Similar to SlicNameRef, another ACPI entry that is used in more recent Windows versions.
+                                        The above points to the spec of MSDM too.
+                                      type: string
                                     slicNameRef:
                                       description: |-
                                         SlicNameRef should match the volume name of a secret object. The data in the secret should
@@ -22173,11 +23224,21 @@ var CRDsValidation map[string]string = map[string]string{
                                     Defaults to a random generated uid.
                                   type: string
                               type: object
+                            ioThreads:
+                              description: IOThreads specifies the IOThreads options.
+                              properties:
+                                supplementalPoolThreadCount:
+                                  description: SupplementalPoolThreadCount specifies
+                                    how many iothreads are allocated for the supplementalPool
+                                    policy.
+                                  format: int32
+                                  type: integer
+                              type: object
                             ioThreadsPolicy:
                               description: |-
                                 Controls whether or not disks will share IOThreads.
                                 Omitting IOThreadsPolicy disables use of IOThreads.
-                                One of: shared, auto
+                                One of: shared, auto, supplementalPool
                               type: string
                             launchSecurity:
                               description: Launch Security setting of the vmi.
@@ -22296,7 +23357,7 @@ var CRDsValidation map[string]string = map[string]string{
                             - "None": No action will be taken, according to the specified 'RunStrategy' the VirtualMachine will be restarted or shutdown.
                             - "LiveMigrate": the VirtualMachineInstance will be migrated instead of being shutdown.
                             - "LiveMigrateIfPossible": the same as "LiveMigrate" but only if the VirtualMachine is Live-Migratable, otherwise it will behave as "None".
-                            - "External": the VirtualMachineInstance will be protected by a PDB and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
+                            - "External": the VirtualMachineInstance will be protected and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
                           type: string
                         hostname:
                           description: |-
@@ -22636,6 +23697,65 @@ var CRDsValidation map[string]string = map[string]string{
                               format: int32
                               type: integer
                           type: object
+                        resourceClaims:
+                          description: |-
+                            ResourceClaims define which ResourceClaims must be allocated
+                            and reserved before the VMI, hence virt-launcher pod is allowed to start. The resources
+                            will be made available to the domain which consumes them
+                            by name.
+
+                            This is an alpha field and requires enabling the
+                            DynamicResourceAllocation feature gate in kubernetes
+                             https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/
+                            This field should only be configured if one of the feature-gates GPUsWithDRA or HostDevicesWithDRA is enabled.
+                            This feature is in alpha.
+                          items:
+                            description: |-
+                              PodResourceClaim references exactly one ResourceClaim, either directly
+                              or by naming a ResourceClaimTemplate which is then turned into a ResourceClaim
+                              for the pod.
+
+                              It adds a name to it that uniquely identifies the ResourceClaim inside the Pod.
+                              Containers that need access to the ResourceClaim reference it with this name.
+                            properties:
+                              name:
+                                description: |-
+                                  Name uniquely identifies this resource claim inside the pod.
+                                  This must be a DNS_LABEL.
+                                type: string
+                              resourceClaimName:
+                                description: |-
+                                  ResourceClaimName is the name of a ResourceClaim object in the same
+                                  namespace as this pod.
+
+                                  Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                                  be set.
+                                type: string
+                              resourceClaimTemplateName:
+                                description: |-
+                                  ResourceClaimTemplateName is the name of a ResourceClaimTemplate
+                                  object in the same namespace as this pod.
+
+                                  The template will be used to create a new ResourceClaim, which will
+                                  be bound to this pod. When this pod is deleted, the ResourceClaim
+                                  will also be deleted. The pod name and resource name, along with a
+                                  generated component, will be used to form a unique name for the
+                                  ResourceClaim, which will be recorded in pod.status.resourceClaimStatuses.
+
+                                  This field is immutable and no changes will be made to the
+                                  corresponding ResourceClaim by the control plane after creating the
+                                  ResourceClaim.
+
+                                  Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                                  be set.
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
                         schedulerName:
                           description: |-
                             If specified, the VMI will be dispatched by specified scheduler.
@@ -23058,9 +24178,8 @@ var CRDsValidation map[string]string = map[string]string{
                                       volume can be hotplugged and hotunplugged.
                                     type: boolean
                                   name:
-                                    description: |-
-                                      Name of both the DataVolume and the PVC in the same namespace.
-                                      After PVC population the DataVolume is garbage collected by default.
+                                    description: Name of both the DataVolume and the
+                                      PVC in the same namespace.
                                     type: string
                                 required:
                                 - name
@@ -23686,6 +24805,10 @@ var CRDsValidation map[string]string = map[string]string{
               description: PreferredNetworkInterfaceMultiQueue optionally enables
                 the vhost multiqueue feature for virtio interfaces.
               type: boolean
+            preferredPanicDeviceModel:
+              description: PreferredPanicDeviceModel optionally defines the preferred
+                panic device model to use with panic devices.
+              type: string
             preferredRng:
               description: PreferredRng optionally defines the preferred rng device
                 to be used.
@@ -23698,6 +24821,11 @@ var CRDsValidation map[string]string = map[string]string{
               description: PreferredTPM optionally defines the preferred TPM device
                 to be used.
               properties:
+                enabled:
+                  description: |-
+                    Enabled allows a user to explicitly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+                    Defaults to True
+                  type: boolean
                 persistent:
                   description: |-
                     Persistent indicates the state of the TPM device should be kept accross reboots
@@ -23994,13 +25122,18 @@ var CRDsValidation map[string]string = map[string]string{
                 Requires PreferredUseBios to be enabled.
               type: boolean
             preferredUseEfi:
-              description: PreferredUseEfi optionally enables EFI
+              description: |-
+                PreferredUseEfi optionally enables EFI
+
+                Deprecated: Will be removed with v1beta2 or v1
               type: boolean
             preferredUseSecureBoot:
               description: |-
                 PreferredUseSecureBoot optionally enables SecureBoot and the OVMF roms will be swapped for SecureBoot-enabled ones.
 
                 Requires PreferredUseEfi and PreferredSmm to be enabled.
+
+                Deprecated: Will be removed with v1beta2 or v1
               type: boolean
           type: object
         machine:
@@ -24088,7 +25221,8 @@ var CRDsValidation map[string]string = map[string]string{
     metadata:
       type: object
     spec:
-      description: VirtualMachineRestoreSpec is the spec for a VirtualMachineRestoreresource
+      description: VirtualMachineRestoreSpec is the spec for a VirtualMachineRestore
+        resource
       properties:
         patches:
           description: |-
@@ -24120,14 +25254,47 @@ var CRDsValidation map[string]string = map[string]string{
           - name
           type: object
           x-kubernetes-map-type: atomic
+        targetReadinessPolicy:
+          description: |-
+            TargetReadinessPolicy defines how to handle the restore in case
+            the target is not ready
+          type: string
         virtualMachineSnapshotName:
+          type: string
+        volumeRestoreOverrides:
+          description: |-
+            VolumeRestoreOverrides gives the option to change properties of each restored volume
+            For example, specifying the name of the restored volume, or adding labels/annotations to it
+          items:
+            description: VolumeRestoreOverride specifies how a volume should be restored
+              from a VirtualMachineSnapshot
+            properties:
+              annotations:
+                additionalProperties:
+                  type: string
+                type: object
+              labels:
+                additionalProperties:
+                  type: string
+                type: object
+              restoreName:
+                type: string
+              volumeName:
+                type: string
+            type: object
+          type: array
+          x-kubernetes-list-type: atomic
+        volumeRestorePolicy:
+          description: VolumeRestorePolicy defines how to handle the restore of snapshotted
+            volumes
           type: string
       required:
       - target
       - virtualMachineSnapshotName
       type: object
     status:
-      description: VirtualMachineRestoreStatus is the spec for a VirtualMachineRestoreresource
+      description: VirtualMachineRestoreStatus is the status for a VirtualMachineRestore
+        resource
       properties:
         complete:
           type: boolean
@@ -24168,7 +25335,7 @@ var CRDsValidation map[string]string = map[string]string{
           type: string
         restores:
           items:
-            description: VolumeRestore contains the data neeed to restore a PVC
+            description: VolumeRestore contains the data needed to restore a PVC
             properties:
               dataVolumeName:
                 type: string
@@ -24938,38 +26105,6 @@ var CRDsValidation map[string]string = map[string]string{
                                       Resources represents the minimum resources the volume should have.
                                       More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
                                     properties:
-                                      claims:
-                                        description: |-
-                                          Claims lists the names of resources, defined in spec.resourceClaims,
-                                          that are used by this container.
-
-                                          This is an alpha field and requires enabling the
-                                          DynamicResourceAllocation feature gate.
-
-                                          This field is immutable. It can only be set for containers.
-                                        items:
-                                          description: ResourceClaim references one
-                                            entry in PodSpec.ResourceClaims.
-                                          properties:
-                                            name:
-                                              description: |-
-                                                Name must match the name of one entry in pod.spec.resourceClaims of
-                                                the Pod where this field is used. It makes that resource available
-                                                inside a container.
-                                              type: string
-                                            request:
-                                              description: |-
-                                                Request is the name chosen for a request in the referenced claim.
-                                                If empty, everything from the claim is made available, otherwise
-                                                only the result of this request.
-                                              type: string
-                                          required:
-                                          - name
-                                          type: object
-                                        type: array
-                                        x-kubernetes-list-map-keys:
-                                        - name
-                                        x-kubernetes-list-type: map
                                       limits:
                                         additionalProperties:
                                           anyOf:
@@ -26243,9 +27378,13 @@ var CRDsValidation map[string]string = map[string]string{
                                       options of a pod.
                                     properties:
                                       name:
-                                        description: Required.
+                                        description: |-
+                                          Name is this DNS resolver option's name.
+                                          Required.
                                         type: string
                                       value:
+                                        description: Value is this DNS resolver option's
+                                          value.
                                         type: string
                                     type: object
                                   type: array
@@ -26570,7 +27709,11 @@ var CRDsValidation map[string]string = map[string]string{
                                           cache:
                                             description: |-
                                               Cache specifies which kvm disk cache mode should be used.
-                                              Supported values are: CacheNone, CacheWriteThrough.
+                                              Supported values are:
+                                              none: Guest I/O not cached on the host, but may be kept in a disk cache.
+                                              writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
+                                              writeback: Guest I/O cached on the host.
+                                              Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                             type: string
                                           cdrom:
                                             description: Attach a volume as a cdrom
@@ -26701,11 +27844,23 @@ var CRDsValidation map[string]string = map[string]string{
                                         to the vmi.
                                       items:
                                         properties:
+                                          claimName:
+                                            description: |-
+                                              ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                                              device is allocated
+                                            type: string
                                           deviceName:
+                                            description: DeviceName is the name of
+                                              the device provisioned by device-plugins
                                             type: string
                                           name:
                                             description: Name of the GPU device as
                                               exposed by a device plugin
+                                            type: string
+                                          requestName:
+                                            description: |-
+                                              RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                                              device is requested
                                             type: string
                                           tag:
                                             description: If specified, the virtual
@@ -26736,7 +27891,6 @@ var CRDsValidation map[string]string = map[string]string{
                                                 type: object
                                             type: object
                                         required:
-                                        - deviceName
                                         - name
                                         type: object
                                       type: array
@@ -26746,12 +27900,21 @@ var CRDsValidation map[string]string = map[string]string{
                                         to the vmi.
                                       items:
                                         properties:
+                                          claimName:
+                                            description: |-
+                                              ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this
+                                              device is allocated
+                                            type: string
                                           deviceName:
-                                            description: DeviceName is the resource
-                                              name of the host device exposed by a
-                                              device plugin
+                                            description: DeviceName is the name of
+                                              the device provisioned by device-plugins
                                             type: string
                                           name:
+                                            type: string
+                                          requestName:
+                                            description: |-
+                                              RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this
+                                              device is requested
                                             type: string
                                           tag:
                                             description: If specified, the virtual
@@ -26760,7 +27923,6 @@ var CRDsValidation map[string]string = map[string]string{
                                               drive
                                             type: string
                                         required:
-                                        - deviceName
                                         - name
                                         type: object
                                       type: array
@@ -26948,7 +28110,11 @@ var CRDsValidation map[string]string = map[string]string{
                                           state:
                                             description: |-
                                               State represents the requested operational state of the interface.
-                                              The (only) value supported is 'absent', expressing a request to remove the interface.
+                                              The supported values are:
+                                              'absent', expressing a request to remove the interface.
+                                              'down', expressing a request to set the link down.
+                                              'up', expressing a request to set the link up.
+                                              Empty value functions as 'up'.
                                             type: string
                                           tag:
                                             description: If specified, the virtual
@@ -26976,6 +28142,19 @@ var CRDsValidation map[string]string = map[string]string{
                                         factors of the VirtualMachineInstance, like
                                         the number of guest CPUs.
                                       type: boolean
+                                    panicDevices:
+                                      description: PanicDevices provides additional
+                                        crash information when a guest crashes.
+                                      items:
+                                        properties:
+                                          model:
+                                            description: |-
+                                              Model specifies what type of panic device is provided.
+                                              The panic model used when this attribute is missing depends on the hypervisor and guest arch.
+                                              One of: isa, hyperv, pvpanic.
+                                            type: string
+                                        type: object
+                                      type: array
                                     rng:
                                       description: Whether to have random number generator
                                         from host
@@ -26999,6 +28178,11 @@ var CRDsValidation map[string]string = map[string]string{
                                     tpm:
                                       description: Whether to emulate a TPM device.
                                       properties:
+                                        enabled:
+                                          description: |-
+                                            Enabled allows a user to explicitly disable the vTPM even when one is enabled by a preference referenced by the VirtualMachine
+                                            Defaults to True
+                                          type: boolean
                                         persistent:
                                           description: |-
                                             Persistent indicates the state of the TPM device should be kept accross reboots
@@ -27011,10 +28195,30 @@ var CRDsValidation map[string]string = map[string]string{
                                         This is helpful for old machines like CentOS6 or RHEL6 which
                                         do not understand virtio_non_transitional (virtio 1.0).
                                       type: boolean
+                                    video:
+                                      description: Video describes the video device
+                                        configuration for the vmi.
+                                      properties:
+                                        type:
+                                          description: |-
+                                            Type specifies the video device type (e.g., virtio, vga, bochs, ramfb).
+                                            If not specified, the default is architecture-dependent (VGA for BIOS-based VMs, Bochs for EFI-based VMs on AMD64; virtio for Arm and s390x).
+                                          type: string
+                                      type: object
                                     watchdog:
                                       description: Watchdog describes a watchdog device
                                         which can be added to the vmi.
                                       properties:
+                                        diag288:
+                                          description: diag288 watchdog device (specific
+                                            to s390x architecture).
+                                          properties:
+                                            action:
+                                              description: |-
+                                                The action to take. Valid values are poweroff, reset, shutdown.
+                                                Defaults to reset.
+                                              type: string
+                                          type: object
                                         i6300esb:
                                           description: i6300esb watchdog device.
                                           properties:
@@ -27285,6 +28489,11 @@ var CRDsValidation map[string]string = map[string]string{
                                       description: Information that can be set in
                                         the ACPI table
                                       properties:
+                                        msdmNameRef:
+                                          description: |-
+                                            Similar to SlicNameRef, another ACPI entry that is used in more recent Windows versions.
+                                            The above points to the spec of MSDM too.
+                                          type: string
                                         slicNameRef:
                                           description: |-
                                             SlicNameRef should match the volume name of a secret object. The data in the secret should
@@ -27374,11 +28583,21 @@ var CRDsValidation map[string]string = map[string]string{
                                         Defaults to a random generated uid.
                                       type: string
                                   type: object
+                                ioThreads:
+                                  description: IOThreads specifies the IOThreads options.
+                                  properties:
+                                    supplementalPoolThreadCount:
+                                      description: SupplementalPoolThreadCount specifies
+                                        how many iothreads are allocated for the supplementalPool
+                                        policy.
+                                      format: int32
+                                      type: integer
+                                  type: object
                                 ioThreadsPolicy:
                                   description: |-
                                     Controls whether or not disks will share IOThreads.
                                     Omitting IOThreadsPolicy disables use of IOThreads.
-                                    One of: shared, auto
+                                    One of: shared, auto, supplementalPool
                                   type: string
                                 launchSecurity:
                                   description: Launch Security setting of the vmi.
@@ -27497,7 +28716,7 @@ var CRDsValidation map[string]string = map[string]string{
                                 - "None": No action will be taken, according to the specified 'RunStrategy' the VirtualMachine will be restarted or shutdown.
                                 - "LiveMigrate": the VirtualMachineInstance will be migrated instead of being shutdown.
                                 - "LiveMigrateIfPossible": the same as "LiveMigrate" but only if the VirtualMachine is Live-Migratable, otherwise it will behave as "None".
-                                - "External": the VirtualMachineInstance will be protected by a PDB and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
+                                - "External": the VirtualMachineInstance will be protected and 'vmi.Status.EvacuationNodeName' will be set on eviction. This is mainly useful for cluster-api-provider-kubevirt (capk) which needs a way for VMI's to be blocked from eviction, yet signal capk that eviction has been called on the VMI so the capk controller can handle tearing the VMI down. Details can be found in the commit description https://github.com/kubevirt/kubevirt/commit/c1d77face705c8b126696bac9a3ee3825f27f1fa.
                               type: string
                             hostname:
                               description: |-
@@ -27840,6 +29059,65 @@ var CRDsValidation map[string]string = map[string]string{
                                   format: int32
                                   type: integer
                               type: object
+                            resourceClaims:
+                              description: |-
+                                ResourceClaims define which ResourceClaims must be allocated
+                                and reserved before the VMI, hence virt-launcher pod is allowed to start. The resources
+                                will be made available to the domain which consumes them
+                                by name.
+
+                                This is an alpha field and requires enabling the
+                                DynamicResourceAllocation feature gate in kubernetes
+                                 https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/
+                                This field should only be configured if one of the feature-gates GPUsWithDRA or HostDevicesWithDRA is enabled.
+                                This feature is in alpha.
+                              items:
+                                description: |-
+                                  PodResourceClaim references exactly one ResourceClaim, either directly
+                                  or by naming a ResourceClaimTemplate which is then turned into a ResourceClaim
+                                  for the pod.
+
+                                  It adds a name to it that uniquely identifies the ResourceClaim inside the Pod.
+                                  Containers that need access to the ResourceClaim reference it with this name.
+                                properties:
+                                  name:
+                                    description: |-
+                                      Name uniquely identifies this resource claim inside the pod.
+                                      This must be a DNS_LABEL.
+                                    type: string
+                                  resourceClaimName:
+                                    description: |-
+                                      ResourceClaimName is the name of a ResourceClaim object in the same
+                                      namespace as this pod.
+
+                                      Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                                      be set.
+                                    type: string
+                                  resourceClaimTemplateName:
+                                    description: |-
+                                      ResourceClaimTemplateName is the name of a ResourceClaimTemplate
+                                      object in the same namespace as this pod.
+
+                                      The template will be used to create a new ResourceClaim, which will
+                                      be bound to this pod. When this pod is deleted, the ResourceClaim
+                                      will also be deleted. The pod name and resource name, along with a
+                                      generated component, will be used to form a unique name for the
+                                      ResourceClaim, which will be recorded in pod.status.resourceClaimStatuses.
+
+                                      This field is immutable and no changes will be made to the
+                                      corresponding ResourceClaim by the control plane after creating the
+                                      ResourceClaim.
+
+                                      Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                                      be set.
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                              type: array
+                              x-kubernetes-list-map-keys:
+                              - name
+                              x-kubernetes-list-type: map
                             schedulerName:
                               description: |-
                                 If specified, the VMI will be dispatched by specified scheduler.
@@ -28268,9 +29546,8 @@ var CRDsValidation map[string]string = map[string]string{
                                           the volume can be hotplugged and hotunplugged.
                                         type: boolean
                                       name:
-                                        description: |-
-                                          Name of both the DataVolume and the PVC in the same namespace.
-                                          After PVC population the DataVolume is garbage collected by default.
+                                        description: Name of both the DataVolume and
+                                          the PVC in the same namespace.
                                         type: string
                                     required:
                                     - name
@@ -28618,6 +29895,35 @@ var CRDsValidation map[string]string = map[string]string{
                         updated through an Update() before ObservedGeneration in Status.
                       format: int64
                       type: integer
+                    instancetypeRef:
+                      description: InstancetypeRef captures the state of any referenced
+                        instance type from the VirtualMachine
+                      nullable: true
+                      properties:
+                        controllerRevisionRef:
+                          description: |-
+                            ControllerRef specifies the ControllerRevision storing a copy of the object captured
+                            when it is first seen by the VirtualMachine controller
+                          properties:
+                            name:
+                              description: Name of the ControllerRevision
+                              type: string
+                          type: object
+                        inferFromVolume:
+                          description: InferFromVolume lists the name of a volume
+                            that should be used to infer or discover the resource
+                          type: string
+                        inferFromVolumeFailurePolicy:
+                          description: InferFromVolumeFailurePolicy controls what
+                            should happen on failure when inferring the resource
+                          type: string
+                        kind:
+                          description: Kind specifies the kind of resource
+                          type: string
+                        name:
+                          description: Name is the name of resource
+                          type: string
+                      type: object
                     memoryDumpRequest:
                       description: |-
                         MemoryDumpRequest tracks memory dump request phase and info of getting a memory
@@ -28662,6 +29968,35 @@ var CRDsValidation map[string]string = map[string]string{
                         the vmi when started.
                       format: int64
                       type: integer
+                    preferenceRef:
+                      description: PreferenceRef captures the state of any referenced
+                        preference from the VirtualMachine
+                      nullable: true
+                      properties:
+                        controllerRevisionRef:
+                          description: |-
+                            ControllerRef specifies the ControllerRevision storing a copy of the object captured
+                            when it is first seen by the VirtualMachine controller
+                          properties:
+                            name:
+                              description: Name of the ControllerRevision
+                              type: string
+                          type: object
+                        inferFromVolume:
+                          description: InferFromVolume lists the name of a volume
+                            that should be used to infer or discover the resource
+                          type: string
+                        inferFromVolumeFailurePolicy:
+                          description: InferFromVolumeFailurePolicy controls what
+                            should happen on failure when inferring the resource
+                          type: string
+                        kind:
+                          description: Kind specifies the kind of resource
+                          type: string
+                        name:
+                          description: Name is the name of resource
+                          type: string
+                      type: object
                     printableStatus:
                       default: Stopped
                       description: PrintableStatus is a human readable, high-level
@@ -28780,7 +30115,11 @@ var CRDsValidation map[string]string = map[string]string{
                                   cache:
                                     description: |-
                                       Cache specifies which kvm disk cache mode should be used.
-                                      Supported values are: CacheNone, CacheWriteThrough.
+                                      Supported values are:
+                                      none: Guest I/O not cached on the host, but may be kept in a disk cache.
+                                      writethrough: Guest I/O cached on the host but written through to the physical medium. Slowest but with most guarantees.
+                                      writeback: Guest I/O cached on the host.
+                                      Defaults to none if the storage supports O_DIRECT, otherwise writethrough.
                                     type: string
                                   cdrom:
                                     description: Attach a volume as a cdrom to the
@@ -28908,9 +30247,8 @@ var CRDsValidation map[string]string = map[string]string{
                                           the volume can be hotplugged and hotunplugged.
                                         type: boolean
                                       name:
-                                        description: |-
-                                          Name of both the DataVolume and the PVC in the same namespace.
-                                          After PVC population the DataVolume is garbage collected by default.
+                                        description: Name of both the DataVolume and
+                                          the PVC in the same namespace.
                                         type: string
                                     required:
                                     - name
