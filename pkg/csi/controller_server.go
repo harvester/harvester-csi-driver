@@ -54,6 +54,7 @@ const (
 type ControllerServer struct {
 	namespace        string
 	hostStorageClass string
+	hostClusterName  string
 
 	pods ctlv1.PodCache
 
@@ -88,6 +89,7 @@ func NewControllerServer(
 	pods ctlv1.PodCache,
 	namespace string,
 	hostStorageClass string,
+	hostClusterName string,
 ) *ControllerServer {
 	accessMode := []csi.VolumeCapability_AccessMode_Mode{
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
@@ -104,6 +106,7 @@ func NewControllerServer(
 	return &ControllerServer{
 		namespace:        namespace,
 		hostStorageClass: hostStorageClass,
+		hostClusterName:  hostClusterName,
 		localCoreClient:  localCoreClient,
 		coreClient:       coreClient,
 		storageClient:    storageClient,
@@ -297,6 +300,8 @@ func (cs *ControllerServer) buildHostPVCFromSnap(ctx context.Context, name strin
 			},
 		},
 	}
+
+	patchHostClusterName(pvc, cs.hostClusterName)
 
 	return pvc, nil
 }
@@ -1266,6 +1271,7 @@ func (cs *ControllerServer) buildHostPVCFromScratch(name string, vc []*csi.Volum
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 		},
 	}
+	patchHostClusterName(pvc, cs.hostClusterName)
 
 	volumeMode := cs.getVolumeMode(vc)
 	targetSC, targetProvisioner, err := cs.getStorageClass(vp)
@@ -1463,4 +1469,17 @@ func (cs *ControllerServer) validateHostSnapLabels(hostSnap *snapshotv1.VolumeSn
 	}
 
 	return nil
+}
+
+func patchHostClusterName(pvc *corev1.PersistentVolumeClaim, hostClusterName string) {
+	// label the pvc with guest cluster name if we discovered the host cluster name
+	if hostClusterName == "" {
+		logrus.Warnf("hostClusterName is empty, cannot patch PVC %s with guest cluster name", pvc.Name)
+		return
+	}
+
+	if pvc.ObjectMeta.Labels == nil {
+		pvc.ObjectMeta.Labels = make(map[string]string)
+	}
+	pvc.ObjectMeta.Labels[guestClusterNameLabel] = hostClusterName
 }
