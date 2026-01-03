@@ -323,13 +323,13 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	// Create a PVC from the host cluster
-	hotsPVC, err := cs.buildHostPVC(ctx, req, volumeParameters, volSizeBytes)
+	hostPVC, err := cs.buildHostPVC(ctx, req, volumeParameters, volSizeBytes)
 	if err != nil {
 		return nil, err
 	}
-	logrus.Infof("The build host PVC %s/%s", hotsPVC.Namespace, hotsPVC.Name)
+	logrus.Infof("The build host PVC %s/%s", hostPVC.Namespace, hostPVC.Name)
 
-	resHostPVC, err := cs.createHostPVC(hotsPVC)
+	resHostPVC, err := cs.createHostPVC(hostPVC)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
