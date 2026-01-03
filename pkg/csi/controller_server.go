@@ -335,7 +335,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	// TODO: we need generalize the RWX volume on next release
-	if isLHRWXVolume(resHostPVC) {
+	if cs.isLHRWXVolume(resHostPVC) {
 		if !cs.waitForLHVolumeName(resHostPVC.Name) {
 			return nil, status.Errorf(codes.DeadlineExceeded, "Failed to create volume %s", resHostPVC.Name)
 		}
@@ -391,7 +391,7 @@ func (cs *ControllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	}
 
 	// TODO: we need generalize the RWX volume on next release
-	if isLHRWXVolume(resPVC) {
+	if cs.isLHRWXVolume(resPVC) {
 		// do no-op if the networkfilesystem is already deleted
 		if _, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), resPVC.Spec.VolumeName, metav1.GetOptions{}); err != nil && !errors.IsNotFound(err) {
 			return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", resPVC.Spec.VolumeName, err)
@@ -471,7 +471,7 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 
 	// do no-op here with RWX volume
 	if volumeCapability.AccessMode.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
-		if isLHRWXVolume(pvc) {
+		if cs.isLHRWXVolume(pvc) {
 			return cs.publishRWXVolume(pvc)
 		}
 		logrus.Info("Do no-op for non-LH RWX volume")
@@ -596,7 +596,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 	}
 
 	// TODO: we need generalize the RWX volume on next release
-	if isLHRWXVolume(pvc) {
+	if cs.isLHRWXVolume(pvc) {
 		return cs.unpublishRWXVolume(pvc)
 	}
 
@@ -1397,23 +1397,30 @@ func (cs *ControllerServer) waitForLHVolumeName(pvcName string) bool {
 	}
 }
 
-func isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
+func (cs *ControllerServer) isLHRWXVolume(pvc *corev1.PersistentVolumeClaim) bool {
 	if pvc.Spec.VolumeMode == nil || *pvc.Spec.VolumeMode != corev1.PersistentVolumeFilesystem {
 		return false
 	}
+
 	if len(pvc.Spec.AccessModes) == 0 {
 		return false
 	}
+
 	for _, mode := range pvc.Spec.AccessModes {
 		if mode != corev1.ReadWriteMany {
 			continue
 		}
 
-		// Check if the provisioner is Longhorn
-		if provisioner := pvc.Annotations[utils.AnnStorageProvisioner]; provisioner == longhornProvisioner {
-			return true
+		scName := pvc.Spec.StorageClassName
+		sc, err := cs.getHostSC(*scName)
+
+		if err != nil {
+			logrus.Errorf("Failed to retrieve host StorageClass: %v", err)
 		}
 
+		if sc.Provisioner == longhornProvisioner {
+			return true
+		}
 	}
 	return false
 }
