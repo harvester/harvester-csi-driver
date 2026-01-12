@@ -177,6 +177,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 		restConfig.Host,
 	)
 	m.cs = NewControllerServer(
+		localKubeClient,
 		localCoreClient.Core().V1(),
 		coreClient.Core().V1(),
 		storageClient.Storage().V1(),
