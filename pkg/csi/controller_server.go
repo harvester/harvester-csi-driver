@@ -40,6 +40,8 @@ const (
 	genericTimeout          = 60 * time.Second
 	genericTickTime         = 2 * time.Second
 	snapReadyTimeout        = 90 * time.Second // Longer timeout for snapshot operations
+	attachCheckInterval     = 3 * time.Second
+	attachCheckTimeout      = 15 * time.Second
 	paramHostSC             = "hostStorageClass"
 	paramHostVolMode        = "hostVolumeMode"
 	longhornProvisioner     = "driver.longhorn.io"
@@ -58,6 +60,7 @@ type ControllerServer struct {
 	pods ctlv1.PodCache
 
 	// local clients
+	localKubeClient *kubernetes.Clientset
 	localCoreClient ctlv1.Interface
 
 	// these clients are used to access the host cluster resources
@@ -76,6 +79,7 @@ type ControllerServer struct {
 }
 
 func NewControllerServer(
+	localKubeClient *kubernetes.Clientset,
 	localCoreClient ctlv1.Interface,
 	coreClient ctlv1.Interface,
 	storageClient ctlstoragev1.Interface,
@@ -104,6 +108,7 @@ func NewControllerServer(
 	return &ControllerServer{
 		namespace:        namespace,
 		hostStorageClass: hostStorageClass,
+		localKubeClient:  localKubeClient,
 		localCoreClient:  localCoreClient,
 		coreClient:       coreClient,
 		storageClient:    storageClient,
@@ -478,12 +483,21 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		return &csi.ControllerPublishVolumeResponse{}, nil
 	}
 
-	// we should wait for the volume to be detached from the host cluster (VM)
-	// Wait until the volumeattachment or VM device is cleaned up on the host cluster
+	// Wait until the volumeattachment is cleaned up on the host cluster
 	if err := wait.PollUntilContextTimeout(context.Background(), genericTickTime, genericTimeout, true, func(context.Context) (bool, error) {
 		return cs.waitForVASettled(pvc, req.GetNodeId())
 	}); err != nil {
 		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to wait the volume %s status to settled, err: %v", req.GetVolumeId(), err)
+	}
+
+	// Check if the volume is already attached to the target VM and VMI
+	attached, err := cs.isVolAttached(req.GetNodeId(), req.GetVolumeId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to check volume %s in VM/VMI %s: %v", req.GetVolumeId(), req.GetNodeId(), err)
+	}
+	if attached {
+		logrus.Infof("Volume %s is already attached to VM/VMI %s", req.GetVolumeId(), req.GetNodeId())
+		return &csi.ControllerPublishVolumeResponse{}, nil
 	}
 
 	opts := &kubevirtv1.AddVolumeOptions{
@@ -509,72 +523,93 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		return nil, status.Errorf(codes.Internal, "Failed to add volume to node %v: %v", req.GetNodeId(), err)
 	}
 
-	checkPVCBound := func(vol *corev1.PersistentVolumeClaim) bool {
-		return vol.Status.Phase == corev1.ClaimBound
+	// Poll every 3 seconds, up to 5 times, to verify the volume is attached to both VM and VMI
+	if err := cs.waitForVolumeAttached(req.GetNodeId(), req.GetVolumeId()); err != nil {
+		return nil, err
 	}
 
-	if !cs.waitForPVCState(req.VolumeId, "Bound", checkPVCBound) {
-		return nil, status.Errorf(codes.DeadlineExceeded, "Failed to attach volume %s to node %s", req.GetVolumeId(), req.GetNodeId())
-	}
-
+	logrus.Infof("Volume %s successfully attached to VM/VMI %s", req.GetVolumeId(), req.GetNodeId())
 	return &csi.ControllerPublishVolumeResponse{}, nil
 }
 
-// waitForVaSettled used to ensure the host VA is cleaned up before we attach the volume on the guest cluster.
-func (cs *ControllerServer) waitForVASettled(pvc *corev1.PersistentVolumeClaim, nodeID string) (bool, error) {
-	skipCheckHostVA := false
-	hostVAs, err := cs.kubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		// ignore error here becaseu we might have permission issue ono old Harvester cluster
-		logrus.Warnf("Failed to list VolumeAttachments: %v, Skip VA checking because the host might be the old version.", err)
-		skipCheckHostVA = true
-	}
-	volumeMode := pvc.Spec.VolumeMode
-	if !cs.checkVolumeInUseByVM(pvc) {
-		if skipCheckHostVA || volumeMode == nil || *volumeMode == corev1.PersistentVolumeFilesystem {
-			return true, nil
-		}
-	} else {
-		logrus.Infof("Volume %s is already attached to node", pvc.Spec.VolumeName)
+// waitForVolumeAttached polls until the target volume is visible in both VM and VMI.
+func (cs *ControllerServer) waitForVolumeAttached(nodeID, volumeID string) error {
+	if err := wait.PollUntilContextTimeout(
+		context.Background(),
+		attachCheckInterval,
+		attachCheckTimeout,
+		false,
+		cs.volumeAttachedCheck(nodeID, volumeID),
+	); err != nil {
+		return status.Errorf(codes.Aborted, "Volume %s not yet attached to VM/VMI %s, err: %v", volumeID, nodeID, err)
 	}
 
-	// get corresponding nodeID of the VM
+	return nil
+}
+
+func (cs *ControllerServer) volumeAttachedCheck(nodeID, volumeID string) func(context.Context) (bool, error) {
+	return func(context.Context) (bool, error) {
+		attached, err := cs.isVolAttached(nodeID, volumeID)
+		if err != nil {
+			logrus.Warnf("Failed to check volume %s in VM/VMI %s: %v", volumeID, nodeID, err)
+			return false, nil
+		}
+		return attached, nil
+	}
+}
+
+// waitForVASettled ensures the host and guest VAs are cleaned up before we attach the volume on the guest cluster.
+func (cs *ControllerServer) waitForVASettled(pvc *corev1.PersistentVolumeClaim, nodeID string) (bool, error) {
+	hostVAs, err := cs.kubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		// ignore error here because we might have permission issue on old Harvester cluster
+		logrus.Warnf("Failed to list VolumeAttachments: %v, Skip VA checking because the host might be the old version.", err)
+		return true, nil
+	}
+	volumeMode := pvc.Spec.VolumeMode
+	if volumeMode == nil || *volumeMode == corev1.PersistentVolumeFilesystem {
+		return true, nil
+	}
+
+	if settled, err := cs.checkHostVA(pvc, nodeID, hostVAs); err != nil || !settled {
+		return settled, err
+	}
+
+	return cs.checkGuestVA(pvc, nodeID)
+}
+
+// checkHostVA ensures there is no stale host-side VolumeAttachment pointing to a different host node.
+func (cs *ControllerServer) checkHostVA(pvc *corev1.PersistentVolumeClaim, nodeID string, hostVAs *storagev1.VolumeAttachmentList) (bool, error) {
 	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), nodeID, metav1.GetOptions{})
 	if err != nil {
 		return false, status.Errorf(codes.Internal, "Failed to get VMI %s: %v", nodeID, err)
 	}
 	targetHostNodeID := vmi.Status.NodeName
 
-	// for block volume, we need to check the volumeattachments
-	// and ensure there is no any volumeattachment on the host side.
-	volumeID := pvc.Spec.VolumeName
+	hostVolumeID := pvc.Spec.VolumeName
 	for _, va := range hostVAs.Items {
-		if *va.Spec.Source.PersistentVolumeName == volumeID && va.Spec.NodeName != targetHostNodeID {
-			logrus.Warnf("Block Volume %s is already attached to node %s, cannot attach to node %s", volumeID, va.Spec.NodeName, nodeID)
+		if *va.Spec.Source.PersistentVolumeName == hostVolumeID && va.Spec.NodeName != targetHostNodeID {
+			logrus.Warnf("Block Volume %s is already attached to host node %s, cannot attach to node %s", hostVolumeID, va.Spec.NodeName, targetHostNodeID)
 			return false, nil
 		}
 	}
-
 	return true, nil
 }
 
-func (cs *ControllerServer) checkVolumeInUseByVM(pvc *corev1.PersistentVolumeClaim) bool {
-	vmiList, err := cs.virtClient.VirtualMachineInstance(cs.namespace).List(context.TODO(), metav1.ListOptions{})
+// checkGuestVA ensures there is no existing guest-side VolumeAttachment on a different guest node.
+func (cs *ControllerServer) checkGuestVA(pvc *corev1.PersistentVolumeClaim, nodeID string) (bool, error) {
+	guestVAs, err := cs.localKubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		// if we cannot list the VMI, we can assume the volume is in use, controller will retry later.
-		logrus.Errorf("Failed to list VMI: %v", err)
-		return true
+		return false, status.Errorf(codes.Internal, "Failed to list guest VolumeAttachments: %v", err)
 	}
-
-	for _, vmi := range vmiList.Items {
-		for _, volStatus := range vmi.Status.VolumeStatus {
-			if volStatus.Name == pvc.Name && volStatus.HotplugVolume != nil {
-				logrus.Infof("Volume %s is in use by VMI %s", pvc.Spec.VolumeName, vmi.Name)
-				return true
-			}
+	guestVolumeID := pvc.Name
+	for _, va := range guestVAs.Items {
+		if va.Status.Attached && *va.Spec.Source.PersistentVolumeName == guestVolumeID && va.Spec.NodeName != nodeID {
+			logrus.Warnf("Block Volume %s is already attached to guest node %s, cannot attach to node %s", guestVolumeID, va.Spec.NodeName, nodeID)
+			return false, nil
 		}
 	}
-	return false
+	return true, nil
 }
 
 // ControllerUnpublishVolume will detach the volume
@@ -600,35 +635,105 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 		return cs.unpublishRWXVolume(pvc)
 	}
 
-	volumeHotplugged := false
-	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), req.GetNodeId(), metav1.GetOptions{})
+	// Check and remove volume from VM or VMI, return error to trigger retry if removal is in progress
+	volRemoving, err := cs.removeVolumeFromHostVM(req.GetNodeId(), req.GetVolumeId())
 	if err != nil {
-		// if the VMI already deleted, we can return success directly
-		if errors.IsNotFound(err) {
-			return &csi.ControllerUnpublishVolumeResponse{}, nil
-		}
-		return nil, status.Errorf(codes.Internal, "Failed to get VMI %s: %v", req.GetNodeId(), err)
+		return nil, status.Errorf(codes.Internal, "Failed to remove volume %s from host VM/VMI: %v", req.GetVolumeId(), err)
 	}
-	for _, volStatus := range vmi.Status.VolumeStatus {
-		if volStatus.Name == req.VolumeId && volStatus.HotplugVolume != nil {
-			volumeHotplugged = true
-			break
-		}
-	}
-
-	if !volumeHotplugged {
-		logrus.Infof("Volume %s is not attached to node %s. No need RemoveVolume operation!", req.GetVolumeId(), req.GetNodeId())
-		return &csi.ControllerUnpublishVolumeResponse{}, nil
-	}
-
-	opts := &kubevirtv1.RemoveVolumeOptions{
-		Name: req.VolumeId,
-	}
-	if err := cs.virtClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to remove volume %v from node %s: %v", req.GetVolumeId(), req.GetNodeId(), err)
+	if volRemoving {
+		// Volume removal request was sent, return error to trigger reconcile
+		return nil, status.Errorf(codes.Aborted, "Volume %s removal in progress from VM/VMI %s, waiting for completion", req.GetVolumeId(), req.GetNodeId())
 	}
 
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
+// removeVolumeFromHostVM checks and removes volume from VM or VMI.
+// Returns (true, nil) if a remove request was sent, (false, nil) if volume doesn't exist in VM/VMI,
+// or (false, error) if an error occurred.
+func (cs *ControllerServer) removeVolumeFromHostVM(nodeID, volumeID string) (bool, error) {
+
+	// Remove VMI first, because remove from VMI will fail once the volume was removed from VM
+	volumeInVMI, err := cs.checkVolumeExistsInVMI(nodeID, volumeID)
+	if err != nil {
+		return false, err
+	}
+
+	if volumeInVMI {
+		logrus.Infof("Volume %s found in VMI %s (not in VM), sending RemoveVolume request to VMI", volumeID, nodeID)
+		opts := &kubevirtv1.RemoveVolumeOptions{
+			Name: volumeID,
+		}
+		if err := cs.virtClient.VirtualMachineInstance(cs.namespace).RemoveVolume(context.TODO(), nodeID, opts); err != nil {
+			return false, fmt.Errorf("failed to remove volume %s from VMI %s: %w", volumeID, nodeID, err)
+		}
+		return true, nil
+	}
+
+	volumeInVM, err := cs.checkVolumeExistsInVM(nodeID, volumeID)
+	if err != nil {
+		return false, err
+	}
+
+	if volumeInVM {
+		logrus.Infof("Volume %s found in VM %s, sending RemoveVolume request to VM", volumeID, nodeID)
+		opts := &kubevirtv1.RemoveVolumeOptions{
+			Name: volumeID,
+		}
+		if err := cs.virtClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), nodeID, opts); err != nil {
+			return false, fmt.Errorf("failed to remove volume %s from VM %s: %w", volumeID, nodeID, err)
+		}
+		return true, nil
+	}
+
+	// Volume doesn't exist in VM or VMI
+	return false, nil
+}
+
+func (cs *ControllerServer) checkVolumeExistsInVM(nodeID, volumeID string) (bool, error) {
+	vm, err := cs.virtClient.VirtualMachine(cs.namespace).Get(context.TODO(), nodeID, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get VM %s: %w", nodeID, err)
+	}
+
+	for _, volume := range vm.Spec.Template.Spec.Volumes {
+		if volume.Name == volumeID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (cs *ControllerServer) checkVolumeExistsInVMI(nodeID, volumeID string) (bool, error) {
+	vmi, err := cs.virtClient.VirtualMachineInstance(cs.namespace).Get(context.TODO(), nodeID, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get VMI %s: %w", nodeID, err)
+	}
+
+	for _, volStatus := range vmi.Status.VolumeStatus {
+		if volStatus.Name == volumeID && volStatus.HotplugVolume != nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (cs *ControllerServer) isVolAttached(nodeID, volumeID string) (bool, error) {
+	volInVM, err := cs.checkVolumeExistsInVM(nodeID, volumeID)
+	if err != nil {
+		return false, err
+	}
+	volInVMI, err := cs.checkVolumeExistsInVMI(nodeID, volumeID)
+	if err != nil {
+		return false, err
+	}
+	return volInVM && volInVMI, nil
 }
 
 func (cs *ControllerServer) ListVolumes(context.Context, *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
