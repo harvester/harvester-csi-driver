@@ -6,9 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sirupsen/logrus"
-
 	supportBundleUtil "github.com/harvester/harvester/pkg/util/supportbundle"
+	"github.com/sirupsen/logrus"
 )
 
 var (

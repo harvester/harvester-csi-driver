@@ -1,7 +1,9 @@
 package csi
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/sys/unix"
@@ -132,4 +134,24 @@ func getNodeFsType(req *csi.NodeExpandVolumeRequest) (string, error) {
 	}
 
 	return fsType, nil
+}
+
+// formatBackupSnapshotID formats a backup snapshot ID from namespace and name
+// Format: "backup:<namespace>/<name>"
+func formatBackupSnapshotID(namespace, name string) string {
+	return fmt.Sprintf("backup:%s/%s", namespace, name)
+}
+
+// parseSnapshotID parses a snapshot ID and returns whether it's a backup snapshot and the name
+// Format: "backup:<namespace>/<name>" for backup snapshots, or just "<name>" for regular snapshots
+func parseSnapshotID(snapshotID string) (isBackup bool, namespace, name string) {
+	if strings.HasPrefix(snapshotID, "backup:") {
+		// Parse backup format: backup:<namespace>/<name>
+		parts := strings.SplitN(strings.TrimPrefix(snapshotID, "backup:"), "/", 2)
+		if len(parts) == 2 {
+			return true, parts[0], parts[1]
+		}
+	}
+	// Regular snapshot format: just the name
+	return false, "", snapshotID
 }

@@ -10,6 +10,10 @@ github.com/Masterminds/semver/v3 v3.4.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lpr
 github.com/NYTimes/gziphandler v1.1.1/go.mod h1:n/CVRwUEOgIxrgPvAQhUUr9oeUtvrhMomdKFjzJNB0c=
 github.com/PuerkitoBio/purell v1.1.1/go.mod h1:c11w/QuzBsJSee3cPx9rAFu61PvFxuPbtSwDGJws/X0=
 github.com/PuerkitoBio/urlesc v0.0.0-20170810143723-de5bf2ad4578/go.mod h1:uGdkoq3SwY9Y+13GIhn11/XLaGBb4BfwItxLd5jeuXE=
+github.com/WebberHuang1118/harvester v0.0.0-20260123064856-f5d26232a2fd h1:ynpCM+BJ/Qcrmt6/tGIWUznvDwVVKIFZ2oOXaU03QpE=
+github.com/WebberHuang1118/harvester v0.0.0-20260123064856-f5d26232a2fd/go.mod h1:j89DN0eSJ7E1XH9isaz6kgYWlajdaMHepdOj1P2ejog=
+github.com/WebberHuang1118/harvester v0.0.0-20260302072803-26473c1be4c7 h1:AmSSPn+0soiIhXHAxS7JF6I2aYk/b4FTtGb71q3cdPo=
+github.com/WebberHuang1118/harvester v0.0.0-20260302072803-26473c1be4c7/go.mod h1:Xmv/kIBGBYaNT2u4m/noOXeaUrwhkjmIOBJQ77H9C6Y=
 github.com/andreyvit/diff v0.0.0-20170406064948-c7f18ee00883 h1:bvNMNQO63//z+xNgfBlViaCIJKLlCJ6/fmUseuG0wVQ=
 github.com/andreyvit/diff v0.0.0-20170406064948-c7f18ee00883/go.mod h1:rCTlJbsFo29Kk6CurOXKm700vrz8f0KW0JNfpkRJY/8=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5/go.mod h1:wHh0iHkYZB8zMSxRWpUBQtwG5a7fFgvEO+odwuTv2gs=
