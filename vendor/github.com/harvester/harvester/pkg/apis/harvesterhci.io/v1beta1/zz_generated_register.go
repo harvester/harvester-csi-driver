@@ -1,5 +1,5 @@
 /*
-Copyright 2025 Rancher Labs, Inc.
+Copyright 2026 SUSE, LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,6 +30,8 @@ import (
 var (
 	AddonResourceName                         = "addons"
 	KeyPairResourceName                       = "keypairs"
+	PVCBackupResourceName                     = "pvcbackups"
+	PVCRestoreResourceName                    = "pvcrestores"
 	PreferenceResourceName                    = "preferences"
 	ResourceQuotaResourceName                 = "resourcequotas"
 	ScheduleVMBackupResourceName              = "schedulevmbackups"
@@ -71,6 +73,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&AddonList{},
 		&KeyPair{},
 		&KeyPairList{},
+		&PVCBackup{},
+		&PVCBackupList{},
+		&PVCRestore{},
+		&PVCRestoreList{},
 		&Preference{},
 		&PreferenceList{},
 		&ResourceQuota{},

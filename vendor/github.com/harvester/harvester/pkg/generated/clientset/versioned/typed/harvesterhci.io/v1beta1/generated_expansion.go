@@ -1,5 +1,5 @@
 /*
-Copyright 2025 Rancher Labs, Inc.
+Copyright 2026 SUSE, LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,6 +21,10 @@ package v1beta1
 type AddonExpansion interface{}
 
 type KeyPairExpansion interface{}
+
+type PVCBackupExpansion interface{}
+
+type PVCRestoreExpansion interface{}
 
 type PreferenceExpansion interface{}
 
