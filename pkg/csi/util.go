@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	deviceByIDDirectory = "/dev/disk/by-id/"
-	driverName          = "driver.harvesterhci.io"
-	LHName              = "Longhorn"
+	guestClusterNameLabel = "guestcluster.harvesterhci.io/name"
+	deviceByIDDirectory   = "/dev/disk/by-id/"
+	driverName            = "driver.harvesterhci.io"
+	LHName                = "Longhorn"
 )
 
 type volumeFilesystemStatistics struct {

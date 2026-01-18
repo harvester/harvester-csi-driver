@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"strings"
 
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	"github.com/harvester/harvester/pkg/util"
@@ -37,6 +38,10 @@ const (
 	loopBackMacAddress        = "00:00:00:00:00:00"
 	csiOnlineExpandValidation = "csi-online-expand-validation"
 	csiDriverConfig           = "csi-driver-config"
+	cloudProviderNS           = "kube-system"
+	cloudProviderName         = "harvester-cloud-provider"
+	argsClusterName           = "--cluster-name="
+	argsClusterNameLen        = len(argsClusterName)
 	threadiness               = 2 // Number of threads to use for the CSI driver
 )
 
@@ -142,6 +147,9 @@ func (m *Manager) Run(cfg *config.Config) error {
 		logrus.WithError(err).Warn("Failed to enumerate MAC addresses for VMI discovery")
 	}
 
+	hostClusterName := discoverClusterName(localKubeClient, cloudProviderNS)
+	logrus.Infof("Discovered Harvester Cluster name: %s", hostClusterName)
+
 	name, err := discoverVMIName(nodeID, virtClient.VirtualMachineInstance(namespace), ifaces)
 	if err == nil {
 		nodeID = name
@@ -189,6 +197,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 		localPods,
 		namespace,
 		cfg.HostStorageClass,
+		hostClusterName,
 	)
 
 	cb := func(ctx context.Context) {
@@ -269,4 +278,27 @@ func discoverVMIName(nodeID string, vmis kubecli.VirtualMachineInstanceInterface
 	}
 
 	return "", errVMINotFound
+}
+
+func discoverClusterName(localKubeClient *kubernetes.Clientset, namespace string) string {
+	clusterName := ""
+	cloudProviderDep, err := localKubeClient.AppsV1().Deployments(namespace).Get(context.TODO(), "harvester-cloud-provider", metav1.GetOptions{})
+	if err != nil {
+		logrus.Warnf("Failed to get harvester-cloud-provider-deployment to discover cluster name: %v", err)
+		return clusterName
+	}
+	// target args: --cluster-name=<cluster-name>
+	for _, c := range cloudProviderDep.Spec.Template.Spec.Containers {
+		// focus on harvester-cloud-provider container
+		if c.Name != cloudProviderName {
+			continue
+		}
+		for _, arg := range c.Args {
+			if strings.HasPrefix(arg, argsClusterName) {
+				clusterName = arg[argsClusterNameLen:]
+				return clusterName
+			}
+		}
+	}
+	return clusterName
 }
