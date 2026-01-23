@@ -29,6 +29,9 @@ const (
 	LabelVMCreator                      = prefix + "/creator"
 	LabelVMimported                     = "migration.harvesterhci.io/imported"
 	LabelNodeNameKey                    = "kubevirt.io/nodeName"
+	LabelHarvesterUpgrade               = prefix + "/upgrade"
+	LabelHarvesterUpgradeState          = prefix + "/upgradeState"
+	LabelHarvesterUpgradeComponent      = prefix + "/upgradeComponent"
 	AnnotationStorageClassName          = prefix + "/storageClassName"
 	AnnotationStorageProvisioner        = prefix + "/storageProvisioner"
 	AnnotationIsDefaultStorageClassName = "storageclass.kubernetes.io/is-default-class"
@@ -37,6 +40,7 @@ const (
 	AnnotationEnableCPUAndMemoryHotplug = prefix + "/enableCPUAndMemoryHotplug"
 
 	AnnotationSkipRancherLoggingAddonWebhookCheck = prefix + "/skipRancherLoggingAddonWebhookCheck"
+	AnnotationSkipDeschedulerAddonWebhookCheck    = prefix + "/skipDeschedulerAddonWebhookCheck"
 
 	// AnnotationSkipResourceQuotaAutoScaling is used to disable to resourcequota auto scaling
 	AnnotationSkipResourceQuotaAutoScaling = prefix + "/skipResourceQuotaAutoScaling"
@@ -67,6 +71,16 @@ const (
 	AnnotationSkipGarbageCollectionThresholdCheck = prefix + "/skipGarbageCollectionThresholdCheck"
 	AnnotationMinCertsExpirationInDay             = prefix + "/minCertsExpirationInDay"
 
+	// AnnotationUpgradeImage indicates the VM image used for Harvester upgrades.
+	// This annotation triggers the VM image controller to create a RWX filesystem data volume
+	// for the upgrade repository Deployment. The UI also uses this annotation during
+	// airgap upgrades when uploading images.
+	AnnotationUpgradeImage = prefix + "/os-upgrade-image"
+
+	AnnotationNodeUpgradePauseMap = prefix + "/node-upgrade-pause-map"
+	NodePause                     = "pause"
+	NodeUnpause                   = "unpause"
+
 	HarvesterManagedNodeLabelKey = prefix + "/managed"
 
 	HarvesterPromoteNodeLabelKey        = prefix + "/promote-node"
@@ -78,6 +92,7 @@ const (
 	BackupTargetSecretName              = "harvester-backup-target-secret"
 	InternalTLSSecretName               = "tls-rancher-internal"
 	Rke2IngressNginxAppName             = "rke2-ingress-nginx"
+	Rke2IngressNginxControllerName      = "rke2-ingress-nginx-controller"
 	CattleSystemNamespaceName           = "cattle-system"
 	CattleMonitoringSystemNamespace     = "cattle-monitoring-system"
 	LonghornSystemNamespaceName         = "longhorn-system"
@@ -87,6 +102,7 @@ const (
 	LocalClusterName                    = "local"
 	HarvesterSystemNamespaceName        = "harvester-system"
 	RancherLoggingName                  = "rancher-logging"
+	DeschedulerName                     = "descheduler"
 	RancherMonitoringPrometheus         = "rancher-monitoring-prometheus"
 	RancherMonitoringAlertmanager       = "rancher-monitoring-alertmanager"
 	RancherMonitoring                   = "rancher-monitoring"
@@ -102,6 +118,8 @@ const (
 	// this object stores all kubevirt related configuration
 	KubeVirtObjectName = "kubevirt"
 	CDIObjectName      = "cdi"
+	DVObjectName       = "DataVolume"
+	PVCObjectName      = "PersistentVolumeClaim"
 
 	HTTPProxyEnv  = "HTTP_PROXY"
 	HTTPSProxyEnv = "HTTPS_PROXY"
@@ -165,13 +183,34 @@ const (
 
 	RKEControlPlaneRoleLabel = "rke.cattle.io/control-plane-role"
 
-	LabelMaintainModeStrategy                          = prefix + "/maintain-mode-strategy"
-	AnnotationMaintainModeStrategyNodeName             = prefix + "/maintain-mode-strategy-node-name"
+	LabelMaintainModeStrategy              = prefix + "/maintain-mode-strategy"
+	AnnotationMaintainModeStrategyNodeName = prefix + "/maintain-mode-strategy-node-name"
+
 	MaintainModeStrategyMigrate                        = "Migrate"
 	MaintainModeStrategyShutdownAndRestartAfterEnable  = "ShutdownAndRestartAfterEnable"
 	MaintainModeStrategyShutdownAndRestartAfterDisable = "ShutdownAndRestartAfterDisable"
 	MaintainModeStrategyShutdown                       = "Shutdown"
+	MaintainModeStrategyDefault                        = MaintainModeStrategyMigrate
+	HarvesterReportedConditionKey                      = prefix + "/condition"
+	HarvesterReportedConditionMessageKey               = prefix + "/condition-message"
+)
 
+var (
+	MaintenanceModeStrategyValidValues = []string{
+		MaintainModeStrategyMigrate,
+		MaintainModeStrategyShutdownAndRestartAfterEnable,
+		MaintainModeStrategyShutdownAndRestartAfterDisable,
+		MaintainModeStrategyShutdown,
+	}
+
+	MaintainModeStrategyShutdownValues = []string{
+		MaintainModeStrategyShutdownAndRestartAfterEnable,
+		MaintainModeStrategyShutdownAndRestartAfterDisable,
+		MaintainModeStrategyShutdown,
+	}
+)
+
+const (
 	// s3 backup target constants
 	AWSAccessKey       = "AWS_ACCESS_KEY_ID"
 	AWSSecretKey       = "AWS_SECRET_ACCESS_KEY"
@@ -239,4 +278,12 @@ const (
 	AnnotationStorageProfileVolumeModeAccessModes = AnnotationCDIPrefix + "/storageProfileVolumeModeAccessModes"
 	FSOverheadRegex                               = `^(0(?:\.\d{1,3})?|1)$`
 	PVCExpandErrorPrefix                          = "PVC_EXPAND"
+
+	VirtualMachineCreatorNodeDriver = "docker-machine-driver-harvester"
+
+	// Addons
+	AddonPrefix            = "addon." + prefix
+	AddonExperimentalLabel = AddonPrefix + "/experimental"
+
+	HarvesterUpgradeComponentRepo = "repo"
 )

@@ -4,6 +4,7 @@ go 1.25
 
 replace (
 	github.com/google/gnostic-models => github.com/google/gnostic-models v0.6.9
+	github.com/harvester/harvester => github.com/WebberHuang1118/harvester v0.0.0-20260123064856-f5d26232a2fd
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring => github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.68.0
 	k8s.io/api => k8s.io/api v0.32.9
 	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.32.9
@@ -59,6 +60,7 @@ require (
 )
 
 require (
+	github.com/containernetworking/cni v1.3.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/kube-logging/logging-operator v0.0.0-20250424202944-7e1f9aad6e21 // indirect
 	github.com/kubereboot/kured v1.13.1 // indirect
@@ -102,8 +104,8 @@ require (
 	github.com/jinzhu/copier v0.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.5 // indirect
-	github.com/k8snetworkplumbingwg/whereabouts v0.8.0 // indirect
+	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.6 // indirect
+	github.com/k8snetworkplumbingwg/whereabouts v0.9.2 // indirect
 	github.com/kube-logging/logging-operator/pkg/sdk v0.12.0 // indirect
 	github.com/kubernetes-csi/external-snapshotter/client/v4 v4.2.0 // indirect
 	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.2.0
@@ -152,7 +154,7 @@ require (
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/term v0.33.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
-	golang.org/x/time v0.11.0 // indirect
+	golang.org/x/time v0.12.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250519155744-55703ea1f237 // indirect
 	google.golang.org/protobuf v1.36.6
@@ -166,7 +168,7 @@ require (
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-aggregator v0.33.1 // indirect
 	k8s.io/kube-openapi v0.31.9 // indirect
-	kubevirt.io/containerized-data-importer-api v1.61.0 // indirect
+	kubevirt.io/containerized-data-importer-api v1.62.0 // indirect
 	kubevirt.io/controller-lifecycle-operator-sdk/api v0.0.0-20220329064328-f3cc58c6ed90 // indirect
 	kubevirt.io/kubevirt v1.6.0 // indirect
 	sigs.k8s.io/cluster-api v1.9.5 // indirect

@@ -1,5 +1,5 @@
 /*
-Copyright 2025 Rancher Labs, Inc.
+Copyright 2026 SUSE, LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -274,6 +274,40 @@ type ScheduleVMBackupList struct {
 
 func NewScheduleVMBackup(namespace, name string, obj ScheduleVMBackup) *ScheduleVMBackup {
 	obj.APIVersion, obj.Kind = SchemeGroupVersion.WithKind("ScheduleVMBackup").ToAPIVersionAndKind()
+	obj.Name = name
+	obj.Namespace = namespace
+	return &obj
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// PVCBackupList is a list of PVCBackup resources
+type PVCBackupList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata"`
+
+	Items []PVCBackup `json:"items"`
+}
+
+func NewPVCBackup(namespace, name string, obj PVCBackup) *PVCBackup {
+	obj.APIVersion, obj.Kind = SchemeGroupVersion.WithKind("PVCBackup").ToAPIVersionAndKind()
+	obj.Name = name
+	obj.Namespace = namespace
+	return &obj
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// PVCRestoreList is a list of PVCRestore resources
+type PVCRestoreList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata"`
+
+	Items []PVCRestore `json:"items"`
+}
+
+func NewPVCRestore(namespace, name string, obj PVCRestore) *PVCRestore {
+	obj.APIVersion, obj.Kind = SchemeGroupVersion.WithKind("PVCRestore").ToAPIVersionAndKind()
 	obj.Name = name
 	obj.Namespace = namespace
 	return &obj
