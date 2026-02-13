@@ -117,7 +117,8 @@ func (ns *NodeServer) nodeStageRWXVolume(req *csi.NodeStageVolumeRequest) (*csi.
 	logrus.Debugf("volumeServerEndpoint: %s", volumeEndpoint)
 	export := fmt.Sprintf("%s:/%s", volumeEndpoint, lhVolName)
 	logrus.Debugf("full endpoint: %s", export)
-	args := []string{"-t", "nfs", "-o", mountOpts}
+	var args = make([]string, 0, 6)
+	args = append(args, "-t", "nfs", "-o", mountOpts)
 	args = append(args, export, stagingTargetPath)
 	logrus.Debugf("target args: %v", args)
 
@@ -549,7 +550,7 @@ func (ns *NodeServer) NodeGetCapabilities(context.Context, *csi.NodeGetCapabilit
 }
 
 func getNodeServiceCapabilities(cs []csi.NodeServiceCapability_RPC_Type) []*csi.NodeServiceCapability {
-	var nscs = make([]*csi.NodeServiceCapability, len(cs))
+	var nscs = make([]*csi.NodeServiceCapability, 0, len(cs))
 
 	for _, cap := range cs {
 		logrus.Infof("Enabling node service capability: %v", cap.String())
