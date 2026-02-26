@@ -351,19 +351,8 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 
 		// that means the longhorn RWX volume (NFS), we need to create networkfilesystem CRD
-		networkfilesystem := &networkfsv1.NetworkFilesystem{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      resPVC.Spec.VolumeName,
-				Namespace: HarvesterNS,
-			},
-			Spec: networkfsv1.NetworkFSSpec{
-				NetworkFSName: resPVC.Spec.VolumeName,
-				DesiredState:  networkfsv1.NetworkFSStateDisabled,
-				Provisioner:   LHName,
-			},
-		}
-		if _, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Create(context.TODO(), networkfilesystem, metav1.CreateOptions{}); err != nil {
-			return nil, status.Error(codes.Internal, err.Error())
+		if err := cs.createNetworkFilesystem(resPVC.Spec.VolumeName); err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to create NetworkFileSystem for volume %s: %v", resPVC.Name, err)
 		}
 	}
 
@@ -375,6 +364,26 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			ContentSource: req.VolumeContentSource,
 		},
 	}, nil
+}
+
+func (cs *ControllerServer) createNetworkFilesystem(volumeName string) error {
+	networkfilesystem := &networkfsv1.NetworkFilesystem{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      volumeName,
+			Namespace: HarvesterNS,
+		},
+		Spec: networkfsv1.NetworkFSSpec{
+			NetworkFSName: volumeName,
+			DesiredState:  networkfsv1.NetworkFSStateDisabled,
+			Provisioner:   LHName,
+		},
+	}
+	if _, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Create(context.TODO(), networkfilesystem, metav1.CreateOptions{}); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (cs *ControllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
@@ -1232,8 +1241,19 @@ func (cs *ControllerServer) validateOnlineExpansion(ctx context.Context, pvc *co
 
 func (cs *ControllerServer) publishRWXVolume(pvc *corev1.PersistentVolumeClaim) (*csi.ControllerPublishVolumeResponse, error) {
 	networkfs, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), pvc.Spec.VolumeName, metav1.GetOptions{})
-	if err != nil {
+	if err != nil && !errors.IsNotFound(err) {
 		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
+	}
+
+	// ensure the corresponding host pvc was not under deleting
+	pvcExistsAndNotDeleting := pvc != nil && pvc.ObjectMeta.DeletionTimestamp == nil
+	if errors.IsNotFound(err) && pvcExistsAndNotDeleting {
+		// give a chance to create the networkfilesystem if not found
+		logrus.Infof("NetworkFileSystem %s not found, creating it now", pvc.Spec.VolumeName)
+		if err := cs.createNetworkFilesystem(pvc.Spec.VolumeName); err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to create NetworkFileSystem for volume %s: %v", pvc.Name, err)
+		}
+		return nil, status.Errorf(codes.Internal, "NetworkFileSystem %s is being recreated, retry in next reconciliation", pvc.Spec.VolumeName)
 	}
 
 	if networkfs.Spec.DesiredState == networkfsv1.NetworkFSStateEnabled || networkfs.Status.State == networkfsv1.NetworkFSStateEnabling {
