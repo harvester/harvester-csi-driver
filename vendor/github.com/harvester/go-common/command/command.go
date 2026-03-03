@@ -48,7 +48,7 @@ func (exec *Executor) Execute(cmd string, args []string) (string, error) {
 	command := cmd
 	cmdArgs := args
 	if exec.namespace != "" {
-		cmdArgs = []string{
+		cmdArgs = []string{ // nolint:prealloc
 			"--mount=" + filepath.Join(exec.namespace, "mnt"),
 			"--net=" + filepath.Join(exec.namespace, "net"),
 			"--ipc=" + filepath.Join(exec.namespace, "ipc"),
@@ -73,7 +73,7 @@ func execute(command string, args []string, timeout time.Duration) (string, erro
 		// add timer to kill the process if timeout
 		timer = time.AfterFunc(timeout, func() {
 			cmdTimeout = true
-			cmd.Process.Kill()
+			cmd.Process.Kill() //nolint:errcheck
 		})
 	}
 	defer timer.Stop()
