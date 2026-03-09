@@ -2,8 +2,9 @@
 
 FROM registry.suse.com/bci/bci-base:16.0
 
+# util-linux: for mount related commands
 RUN zypper update --no-confirm && \
-    zypper install --no-confirm curl iproute2 iputils nfs-client vim xfsprogs e2fsprogs zip
+    zypper install --no-confirm util-linux curl iproute2 iputils nfs-client vim xfsprogs e2fsprogs zip
 
 ARG TARGETPLATFORM
 
