@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
+	"github.com/harvester/harvester/pkg/settings"
 	"github.com/harvester/harvester/pkg/util"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	snapclient "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned"
@@ -28,6 +29,7 @@ import (
 	"github.com/harvester/harvester-csi-driver/pkg/config"
 	"github.com/harvester/harvester-csi-driver/pkg/controller/node"
 	"github.com/harvester/harvester-csi-driver/pkg/sysfsnet"
+	"github.com/harvester/harvester-csi-driver/pkg/utils"
 	"github.com/harvester/harvester-csi-driver/pkg/version"
 )
 
@@ -37,6 +39,7 @@ const (
 	loopBackMacAddress        = "00:00:00:00:00:00"
 	csiOnlineExpandValidation = "csi-online-expand-validation"
 	csiDriverConfig           = "csi-driver-config"
+	serverVersionSettingName  = settings.ServerVersionSettingName
 	threadiness               = 2 // Number of threads to use for the CSI driver
 )
 
@@ -135,6 +138,18 @@ func (m *Manager) Run(cfg *config.Config) error {
 		return err
 	}
 
+	// Determine whether to use declarative hotplug (v1.8+) or legacy subresource API
+	useDeclarativeHotplug := true
+	serverVersionSetting, err := harvClient.HarvesterhciV1beta1().Settings().Get(ctx, serverVersionSettingName, metav1.GetOptions{})
+	if err != nil {
+		// If we can't get the server version, we crash the driver to avoid potential compatibility issues. However, since the setting is new and may not exist in older versions, we log a warning and assume the latest version to allow the driver to run with best effort.
+		logrus.Warnf("Failed to get server-version setting with err %v", err)
+		return err
+	} else {
+		useDeclarativeHotplug = utils.IsVersionAtLeast(serverVersionSetting.Value, 1, 8)
+		logrus.Infof("Harvester server version: %s, useDeclarativeHotplug: %v", serverVersionSetting.Value, useDeclarativeHotplug)
+	}
+
 	nodeID := cfg.NodeID
 
 	ifaces, err := sysfsnet.Interfaces()
@@ -190,6 +205,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 		localPods,
 		namespace,
 		cfg.HostStorageClass,
+		useDeclarativeHotplug,
 	)
 
 	cb := func(ctx context.Context) {
