@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
@@ -73,6 +74,8 @@ type ControllerServer struct {
 	harvClient      *harvclient.Clientset
 	snapClient      *snapclient.Clientset
 
+	useDeclarativeHotplug bool
+
 	caps        []*csi.ControllerServiceCapability
 	accessModes []*csi.VolumeCapability_AccessMode
 	csi.UnimplementedControllerServer
@@ -92,6 +95,7 @@ func NewControllerServer(
 	pods ctlv1.PodCache,
 	namespace string,
 	hostStorageClass string,
+	useDeclarativeHotplug bool,
 ) *ControllerServer {
 	accessMode := []csi.VolumeCapability_AccessMode_Mode{
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
@@ -106,19 +110,20 @@ func NewControllerServer(
 		logrus.Warnf("Failed to list Longhorn volumes, skip checking Longhorn volume status with error: %v", err)
 	}
 	return &ControllerServer{
-		namespace:        namespace,
-		hostStorageClass: hostStorageClass,
-		localKubeClient:  localKubeClient,
-		localCoreClient:  localCoreClient,
-		coreClient:       coreClient,
-		storageClient:    storageClient,
-		virtClient:       virtClient,
-		lhClient:         lhClient,
-		kubeClient:       kubeClient,
-		harvNetFSClient:  harvNetFSClient,
-		harvClient:       harvClient,
-		snapClient:       snapClient,
-		pods:             pods,
+		namespace:             namespace,
+		hostStorageClass:      hostStorageClass,
+		localKubeClient:       localKubeClient,
+		localCoreClient:       localCoreClient,
+		coreClient:            coreClient,
+		storageClient:         storageClient,
+		virtClient:            virtClient,
+		lhClient:              lhClient,
+		kubeClient:            kubeClient,
+		harvNetFSClient:       harvNetFSClient,
+		harvClient:            harvClient,
+		snapClient:            snapClient,
+		pods:                  pods,
+		useDeclarativeHotplug: useDeclarativeHotplug,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -509,8 +514,30 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		return &csi.ControllerPublishVolumeResponse{}, nil
 	}
 
+	if err := cs.hotplugVolumeToVM(req.GetNodeId(), req.GetVolumeId()); err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to add volume to node %v: %v", req.GetNodeId(), err)
+	}
+
+	// Poll every 3 seconds, up to 5 times, to verify the volume is attached to both VM and VMI
+	if err := cs.waitForVolumeAttached(req.GetNodeId(), req.GetVolumeId()); err != nil {
+		return nil, err
+	}
+
+	logrus.Infof("Volume %s successfully attached to VM/VMI %s", req.GetVolumeId(), req.GetNodeId())
+	return &csi.ControllerPublishVolumeResponse{}, nil
+}
+
+// hotplugVolumeToVM will trigger the hotplug process by adding a specific annotation on the PVC, then the controller will handle the hotplug logic in the background.
+func (cs *ControllerServer) hotplugVolumeToVM(nodeID, volumeID string) error {
+	if cs.useDeclarativeHotplug {
+		return cs.addVolumeToVM(nodeID, volumeID)
+	}
+	return cs.addVolumeToVMLegacy(nodeID, volumeID)
+}
+
+func (cs *ControllerServer) addVolumeToVMLegacy(nodeID, volumeID string) error {
 	opts := &kubevirtv1.AddVolumeOptions{
-		Name: req.VolumeId,
+		Name: volumeID,
 		Disk: &kubevirtv1.Disk{
 			DiskDevice: kubevirtv1.DiskDevice{
 				Disk: &kubevirtv1.DiskTarget{
@@ -522,23 +549,12 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 		VolumeSource: &kubevirtv1.HotplugVolumeSource{
 			PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
 				PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: req.VolumeId,
+					ClaimName: volumeID,
 				},
 			},
 		},
 	}
-
-	if err := cs.virtClient.VirtualMachine(cs.namespace).AddVolume(context.TODO(), req.GetNodeId(), opts); err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to add volume to node %v: %v", req.GetNodeId(), err)
-	}
-
-	// Poll every 3 seconds, up to 5 times, to verify the volume is attached to both VM and VMI
-	if err := cs.waitForVolumeAttached(req.GetNodeId(), req.GetVolumeId()); err != nil {
-		return nil, err
-	}
-
-	logrus.Infof("Volume %s successfully attached to VM/VMI %s", req.GetVolumeId(), req.GetNodeId())
-	return &csi.ControllerPublishVolumeResponse{}, nil
+	return cs.virtClient.VirtualMachine(cs.namespace).AddVolume(context.TODO(), nodeID, opts)
 }
 
 // waitForVolumeAttached polls until the target volume is visible in both VM and VMI.
@@ -662,14 +678,45 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 // or (false, error) if an error occurred.
 func (cs *ControllerServer) removeVolumeFromHostVM(nodeID, volumeID string) (bool, error) {
 
-	// Remove VMI first, because remove from VMI will fail once the volume was removed from VM
 	volumeInVMI, err := cs.checkVolumeExistsInVMI(nodeID, volumeID)
 	if err != nil {
 		return false, err
 	}
 
+	volumeInVM, err := cs.checkVolumeExistsInVM(nodeID, volumeID)
+	if err != nil {
+		return false, err
+	}
+
+	if !volumeInVM && !volumeInVMI {
+		return false, nil
+	}
+
+	if volRemoving, err := cs.unplugVolumeFromVM(nodeID, volumeID, volumeInVM, volumeInVMI); err != nil {
+		return volRemoving, err
+	}
+
+	return true, nil
+}
+
+// unplugVolumeFromVM sends the appropriate remove volume request based on where the volume is found (VM or VMI) and whether declarative hotplug is enabled.
+func (cs *ControllerServer) unplugVolumeFromVM(nodeID, volumeID string, volumeInVM, volumeInVMI bool) (bool, error) {
+	if cs.useDeclarativeHotplug {
+		logrus.Infof("Volume %s found in VM/VMI %s, sending remove volume patch to VM", volumeID, nodeID)
+		if err := cs.removeVolumeFromVM(nodeID, volumeID); err != nil {
+			return false, fmt.Errorf("failed to remove volume %s from VM %s: %w", volumeID, nodeID, err)
+		}
+		// let the controller reconcile once will give a little jitter for volume remove process, and we can avoid hitting the
+		return true, nil
+	}
+	return cs.unplugVolumeFromVMLegacy(nodeID, volumeID, volumeInVM, volumeInVMI)
+}
+
+// unplugVolumeFromVMLegacy sends RemoveVolume requests to either the VM or VMI based on where the volume is found, following the legacy subresource API approach.
+func (cs *ControllerServer) unplugVolumeFromVMLegacy(nodeID, volumeID string, volumeInVM, volumeInVMI bool) (bool, error) {
+	// Legacy path: use subresource API
 	if volumeInVMI {
-		logrus.Infof("Volume %s found in VMI %s (not in VM), sending RemoveVolume request to VMI", volumeID, nodeID)
+		logrus.Infof("Volume %s found in VMI %s, sending RemoveVolume request to VMI", volumeID, nodeID)
 		opts := &kubevirtv1.RemoveVolumeOptions{
 			Name: volumeID,
 		}
@@ -677,11 +724,6 @@ func (cs *ControllerServer) removeVolumeFromHostVM(nodeID, volumeID string) (boo
 			return false, fmt.Errorf("failed to remove volume %s from VMI %s: %w", volumeID, nodeID, err)
 		}
 		return true, nil
-	}
-
-	volumeInVM, err := cs.checkVolumeExistsInVM(nodeID, volumeID)
-	if err != nil {
-		return false, err
 	}
 
 	if volumeInVM {
@@ -695,7 +737,7 @@ func (cs *ControllerServer) removeVolumeFromHostVM(nodeID, volumeID string) (boo
 		return true, nil
 	}
 
-	// Volume doesn't exist in VM or VMI
+	// Should not reach here — all cases are handled above. Do not modify this default return.
 	return false, nil
 }
 
@@ -743,6 +785,138 @@ func (cs *ControllerServer) isVolAttached(nodeID, volumeID string) (bool, error)
 		return false, err
 	}
 	return volInVM && volInVMI, nil
+}
+
+// addVolumeToVM declaratively adds a volume and disk to the VM spec via JSON patch.
+func (cs *ControllerServer) addVolumeToVM(nodeID, volumeID string) error {
+	vm, err := cs.virtClient.VirtualMachine(cs.namespace).Get(context.TODO(), nodeID, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get VM %s: %w", nodeID, err)
+	}
+
+	// Check if volume/disk already exists in VM spec (idempotent for partial attach retries)
+	volumeExists := false
+	for _, v := range vm.Spec.Template.Spec.Volumes {
+		if v.Name == volumeID {
+			volumeExists = true
+			break
+		}
+	}
+	diskExists := false
+	for _, d := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+		if d.Name == volumeID {
+			diskExists = true
+			break
+		}
+	}
+	if volumeExists && diskExists {
+		logrus.Infof("Volume %s already present in VM %s spec, skipping patch", volumeID, nodeID)
+		return nil
+	}
+
+	type patchOp struct {
+		Op    string      `json:"op"`
+		Path  string      `json:"path"`
+		Value interface{} `json:"value"`
+	}
+
+	// Test resourceVersion for optimistic concurrency — if the VM was modified
+	// between our GET and PATCH, the patch fails and the CSI controller retries.
+	ops := []patchOp{
+		{Op: "test", Path: "/metadata/resourceVersion", Value: vm.ResourceVersion},
+	}
+
+	if !volumeExists {
+		ops = append(ops, patchOp{
+			Op:   "add",
+			Path: "/spec/template/spec/volumes/-",
+			Value: kubevirtv1.Volume{
+				Name: volumeID,
+				VolumeSource: kubevirtv1.VolumeSource{
+					PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+						PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: volumeID,
+						},
+						Hotpluggable: true,
+					},
+				},
+			},
+		})
+	}
+
+	if !diskExists {
+		ops = append(ops, patchOp{
+			Op:   "add",
+			Path: "/spec/template/spec/domain/devices/disks/-",
+			Value: kubevirtv1.Disk{
+				Name: volumeID,
+				DiskDevice: kubevirtv1.DiskDevice{
+					Disk: &kubevirtv1.DiskTarget{
+						// KubeVirt only supports SCSI for hot-plug volumes.
+						Bus: "scsi",
+					},
+				},
+			},
+		})
+	}
+
+	patch, err := json.Marshal(ops)
+	if err != nil {
+		return fmt.Errorf("failed to generate patch for VM %s: %w", nodeID, err)
+	}
+
+	if _, err := cs.virtClient.VirtualMachine(cs.namespace).Patch(context.TODO(), nodeID, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("failed to patch VM %s: %w", nodeID, err)
+	}
+
+	return nil
+}
+
+// removeVolumeFromVM declaratively removes a volume and disk from the VM spec via JSON patch.
+func (cs *ControllerServer) removeVolumeFromVM(nodeID, volumeID string) error {
+	vm, err := cs.virtClient.VirtualMachine(cs.namespace).Get(context.TODO(), nodeID, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get VM %s: %w", nodeID, err)
+	}
+
+	volumes := make([]kubevirtv1.Volume, 0, len(vm.Spec.Template.Spec.Volumes))
+	for _, v := range vm.Spec.Template.Spec.Volumes {
+		if v.Name != volumeID {
+			volumes = append(volumes, v)
+		}
+	}
+
+	disks := make([]kubevirtv1.Disk, 0, len(vm.Spec.Template.Spec.Domain.Devices.Disks))
+	for _, d := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+		if d.Name != volumeID {
+			disks = append(disks, d)
+		}
+	}
+
+	type patchOp struct {
+		Op    string      `json:"op"`
+		Path  string      `json:"path"`
+		Value interface{} `json:"value"`
+	}
+
+	// Test resourceVersion for optimistic concurrency — if the VM was modified
+	// between our GET and PATCH, the patch fails and the CSI controller retries.
+	ops := []patchOp{
+		{Op: "test", Path: "/metadata/resourceVersion", Value: vm.ResourceVersion},
+		{Op: "replace", Path: "/spec/template/spec/volumes", Value: volumes},
+		{Op: "replace", Path: "/spec/template/spec/domain/devices/disks", Value: disks},
+	}
+
+	patch, err := json.Marshal(ops)
+	if err != nil {
+		return fmt.Errorf("failed to generate patch for VM %s: %w", nodeID, err)
+	}
+
+	if _, err := cs.virtClient.VirtualMachine(cs.namespace).Patch(context.TODO(), nodeID, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("failed to patch VM %s: %w", nodeID, err)
+	}
+
+	return nil
 }
 
 func (cs *ControllerServer) ListVolumes(context.Context, *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
