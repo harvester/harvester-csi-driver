@@ -662,9 +662,21 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 // or (false, error) if an error occurred.
 func (cs *ControllerServer) removeVolumeFromHostVM(nodeID, volumeID string) (bool, error) {
 
+	// Remove VMI first, because remove from VMI will fail once the volume was removed from VM
 	volumeInVMI, err := cs.checkVolumeExistsInVMI(nodeID, volumeID)
 	if err != nil {
 		return false, err
+	}
+
+	if volumeInVMI {
+		logrus.Infof("Volume %s found in VMI %s (not in VM), sending RemoveVolume request to VMI", volumeID, nodeID)
+		opts := &kubevirtv1.RemoveVolumeOptions{
+			Name: volumeID,
+		}
+		if err := cs.virtClient.VirtualMachineInstance(cs.namespace).RemoveVolume(context.TODO(), nodeID, opts); err != nil {
+			return false, fmt.Errorf("failed to remove volume %s from VMI %s: %w", volumeID, nodeID, err)
+		}
+		return true, nil
 	}
 
 	volumeInVM, err := cs.checkVolumeExistsInVM(nodeID, volumeID)
@@ -672,27 +684,18 @@ func (cs *ControllerServer) removeVolumeFromHostVM(nodeID, volumeID string) (boo
 		return false, err
 	}
 
-	if !volumeInVM && !volumeInVMI {
-		// Volume doesn't exist in VM or VMI
-		return false, nil
-	}
-
-	opts := &kubevirtv1.RemoveVolumeOptions{
-		Name: volumeID,
-	}
-
-	// Since VMI is owned by VM, we always send the RemoveVolume request to VM
-	// regardless of whether the volume remains in VM or VMI.
-	if volumeInVMI || volumeInVM {
-		logrus.Infof("Volume %s found in VM/VMI %s, sending RemoveVolume request to VM", volumeID, nodeID)
+	if volumeInVM {
+		logrus.Infof("Volume %s found in VM %s, sending RemoveVolume request to VM", volumeID, nodeID)
+		opts := &kubevirtv1.RemoveVolumeOptions{
+			Name: volumeID,
+		}
 		if err := cs.virtClient.VirtualMachine(cs.namespace).RemoveVolume(context.TODO(), nodeID, opts); err != nil {
 			return false, fmt.Errorf("failed to remove volume %s from VM %s: %w", volumeID, nodeID, err)
 		}
 		return true, nil
 	}
 
-	// Should not reach here because !volumeInVM && !volumeInVMI is handled above,
-	// but keep a safe default.
+	// Volume doesn't exist in VM or VMI
 	return false, nil
 }
 
