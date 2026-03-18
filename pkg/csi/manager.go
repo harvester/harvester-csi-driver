@@ -209,7 +209,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 	)
 
 	cb := func(ctx context.Context) {
-		if err := node.Register(ctx, localCoreClient.Core().V1().Node(), virtClient, nodeID, namespace); err != nil {
+		if err := node.Register(ctx, localCoreClient.Core().V1().Node(), virtClient, nodeID, namespace, useDeclarativeHotplug); err != nil {
 			logrus.Errorf("Failed to register event controller: %v", err)
 		}
 		if err := start.All(ctx, threadiness, localCoreClient); err != nil {

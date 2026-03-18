@@ -2,12 +2,14 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	ctlcorev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 )
@@ -19,7 +21,8 @@ type Controller struct {
 	NodeCache ctlcorev1.NodeCache
 	Nodes     ctlcorev1.NodeController
 
-	virtClient kubecli.KubevirtClient
+	virtClient            kubecli.KubevirtClient
+	useDeclarativeHotplug bool
 }
 
 const (
@@ -28,7 +31,7 @@ const (
 )
 
 // Register register the longhorn node CRD controller
-func Register(ctx context.Context, node ctlcorev1.NodeController, virtClient kubecli.KubevirtClient, nodeName, namespace string) error {
+func Register(ctx context.Context, node ctlcorev1.NodeController, virtClient kubecli.KubevirtClient, nodeName, namespace string, useDeclarativeHotplug bool) error {
 
 	c := &Controller{
 		nodeName:  nodeName,
@@ -36,7 +39,8 @@ func Register(ctx context.Context, node ctlcorev1.NodeController, virtClient kub
 		Nodes:     node,
 		NodeCache: node.Cache(),
 
-		virtClient: virtClient,
+		virtClient:            virtClient,
+		useDeclarativeHotplug: useDeclarativeHotplug,
 	}
 
 	c.Nodes.OnChange(ctx, harvesterCSINodeHandlerName, c.OnNodesChange)
@@ -135,28 +139,87 @@ func (c *Controller) addTaint(node *corev1.Node) (*corev1.Node, error) {
 }
 
 func (c *Controller) removeAllHotplugVolumes(vm *kubevirtv1.VirtualMachine) error {
-	allHotplugVolumes := []string{}
-	for _, volume := range vm.Spec.Template.Spec.Volumes {
+	// Re-fetch the latest VM to avoid operating on a stale spec.
+	latestVM, err := c.virtClient.VirtualMachine(c.namespace).Get(context.TODO(), vm.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get latest VM %s/%s: %w", vm.Namespace, vm.Name, err)
+	}
+
+	hotplugNames := map[string]bool{}
+	for _, volume := range latestVM.Spec.Template.Spec.Volumes {
 		if volume.PersistentVolumeClaim != nil && volume.PersistentVolumeClaim.Hotpluggable {
-			allHotplugVolumes = append(allHotplugVolumes, volume.Name)
+			hotplugNames[volume.Name] = true
 		}
 	}
 
 	// if no hotplug volumes, return
-	if len(allHotplugVolumes) == 0 {
+	if len(hotplugNames) == 0 {
 		return nil
 	}
 
-	logrus.Infof("Removing the all hotplug volumes: %v from VM %s/%s", allHotplugVolumes, vm.Namespace, vm.Name)
-	for _, volume := range allHotplugVolumes {
-		// remove the hotplug volume
+	if c.useDeclarativeHotplug {
+		return c.removeAllHotplugVolumesByPatch(latestVM, hotplugNames)
+	}
+
+	return c.removeAllHotplugVolumesBySubresource(latestVM, hotplugNames)
+}
+
+// removeAllHotplugVolumesByPatch removes all hotplug volumes from VM via a single JSON patch.
+func (c *Controller) removeAllHotplugVolumesByPatch(vm *kubevirtv1.VirtualMachine, hotplugNames map[string]bool) error {
+	volumes := make([]kubevirtv1.Volume, 0, len(vm.Spec.Template.Spec.Volumes))
+	for _, v := range vm.Spec.Template.Spec.Volumes {
+		if !hotplugNames[v.Name] {
+			volumes = append(volumes, v)
+		}
+	}
+
+	disks := make([]kubevirtv1.Disk, 0, len(vm.Spec.Template.Spec.Domain.Devices.Disks))
+	for _, d := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+		if !hotplugNames[d.Name] {
+			disks = append(disks, d)
+		}
+	}
+
+	logrus.Infof("Removing all hotplug volumes from VM %s/%s via patch", vm.Namespace, vm.Name)
+
+	type patchOp struct {
+		Op    string      `json:"op"`
+		Path  string      `json:"path"`
+		Value interface{} `json:"value"`
+	}
+
+	// Test resourceVersion for optimistic concurrency — if the VM was modified
+	// between our GET and PATCH, the patch fails and the caller retries.
+	ops := []patchOp{
+		{Op: "test", Path: "/metadata/resourceVersion", Value: vm.ResourceVersion},
+		{Op: "replace", Path: "/spec/template/spec/volumes", Value: volumes},
+		{Op: "replace", Path: "/spec/template/spec/domain/devices/disks", Value: disks},
+	}
+
+	patch, err := json.Marshal(ops)
+	if err != nil {
+		return fmt.Errorf("failed to generate patch for VM %s/%s: %w", vm.Namespace, vm.Name, err)
+	}
+
+	if _, err := c.virtClient.VirtualMachine(c.namespace).Patch(context.TODO(), vm.Name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("failed to patch VM %s/%s to remove hotplug volumes: %w", vm.Namespace, vm.Name, err)
+	}
+
+	logrus.Infof("Removed all hotplug volumes from VM %s/%s", vm.Namespace, vm.Name)
+	return nil
+}
+
+// removeAllHotplugVolumesBySubresource removes all hotplug volumes from VM via legacy subresource API.
+func (c *Controller) removeAllHotplugVolumesBySubresource(vm *kubevirtv1.VirtualMachine, hotplugNames map[string]bool) error {
+	logrus.Infof("Removing all hotplug volumes from VM %s/%s via subresource API", vm.Namespace, vm.Name)
+	for name := range hotplugNames {
 		opts := &kubevirtv1.RemoveVolumeOptions{
-			Name: volume,
+			Name: name,
 		}
 		if err := c.virtClient.VirtualMachine(c.namespace).RemoveVolume(context.TODO(), vm.Name, opts); err != nil {
-			return fmt.Errorf("failed to remove hotplug volume %s from VM %s/%s: %w", volume, vm.Namespace, vm.Name, err)
+			return fmt.Errorf("failed to remove hotplug volume %s from VM %s/%s: %w", name, vm.Namespace, vm.Name, err)
 		}
-		logrus.Infof("Removed hotplug volume %s from VM %s/%s", volume, vm.Namespace, vm.Name)
+		logrus.Infof("Removed hotplug volume %s from VM %s/%s", name, vm.Namespace, vm.Name)
 	}
 	return nil
 }
