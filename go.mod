@@ -32,7 +32,7 @@ replace (
 require (
 	github.com/container-storage-interface/spec v1.11.0
 	github.com/harvester/go-common v0.0.0-20260119194217-0f17176ce67e
-	github.com/harvester/harvester v1.8.0-dev-20260301.0.20260302074455-e892272f8ea2
+	github.com/harvester/harvester v1.8.0-dev-20260301.0.20260320020150-7f502747a4cc
 	github.com/harvester/networkfs-manager v1.6.1
 	github.com/kubernetes-csi/csi-lib-utils v0.20.0
 	github.com/longhorn/longhorn-manager v1.8.1
@@ -41,11 +41,11 @@ require (
 	github.com/rancher/wrangler/v3 v3.2.3-rc.3
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli v1.22.16
-	golang.org/x/mod v0.29.0
-	golang.org/x/sys v0.38.0
+	golang.org/x/mod v0.32.0
+	golang.org/x/sys v0.40.0
 	google.golang.org/grpc v1.73.0
-	k8s.io/api v0.34.0
-	k8s.io/apimachinery v0.34.0
+	k8s.io/api v0.34.1
+	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/kubernetes v1.33.7
 	k8s.io/mount-utils v0.32.2
@@ -65,7 +65,8 @@ require (
 	github.com/ovn-org/libovsdb v0.7.0 // indirect
 	go.uber.org/mock v0.5.2 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	golang.org/x/net v0.47.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/net v0.49.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 )
 
@@ -103,8 +104,8 @@ require (
 	github.com/jinzhu/copier v0.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.6 // indirect
-	github.com/k8snetworkplumbingwg/whereabouts v0.9.2 // indirect
+	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.7 // indirect
+	github.com/k8snetworkplumbingwg/whereabouts v0.9.3 // indirect
 	github.com/kube-logging/logging-operator/pkg/sdk v0.12.0 // indirect
 	github.com/kubernetes-csi/external-snapshotter/client/v4 v4.2.0 // indirect
 	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.2.0
@@ -116,7 +117,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/onsi/gomega v1.38.0 // indirect
+	github.com/onsi/gomega v1.39.1 // indirect
 	github.com/opencontainers/selinux v1.13.0 // indirect
 	github.com/openshift/api v0.0.0 // indirect
 	github.com/openshift/client-go v3.9.0+incompatible // indirect
@@ -147,16 +148,16 @@ require (
 	go.opentelemetry.io/otel v1.37.0 // indirect
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/exp v0.0.0-20250911091902-df9299821621 // indirect
 	golang.org/x/oauth2 v0.31.0 // indirect
-	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/term v0.37.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
-	golang.org/x/time v0.13.0 // indirect
+	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/term v0.39.0 // indirect
+	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/time v0.14.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250715232539-7130f93afb79 // indirect
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/protobuf v1.36.7
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
