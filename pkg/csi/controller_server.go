@@ -216,13 +216,6 @@ func (cs *ControllerServer) deleteHostVolumeRemoteRestore(ctx context.Context, n
 	return cs.harvClient.HarvesterhciV1beta1().VolumeRemoteRestores(ns).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
-func (cs *ControllerServer) listHostVolumeRemoteRestores(ctx context.Context,
-	ns string,
-	lo metav1.ListOptions,
-) (*harvesterv1beta1.VolumeRemoteRestoreList, error) {
-	return cs.harvClient.HarvesterhciV1beta1().VolumeRemoteRestores(ns).List(ctx, lo)
-}
-
 func (cs *ControllerServer) getHarvCSIConfig(ctx context.Context) (*harvesterv1beta1.Setting, error) {
 	return cs.harvClient.HarvesterhciV1beta1().Settings().Get(ctx, csiDriverConfig, metav1.GetOptions{})
 }
@@ -1262,8 +1255,7 @@ func (cs *ControllerServer) convertVolumeRemoteBackupToCSI(vrb *harvesterv1beta1
 		sizeBytes = requests.Storage().Value()
 	}
 
-	var readyToUse bool
-	readyToUse = vrb.Status.Success
+	readyToUse := vrb.Status.Success
 
 	return &csi.Snapshot{
 		SnapshotId:     formatBackupSnapshotID(vrb.Namespace, vrb.Name),
@@ -1772,6 +1764,8 @@ func (cs *ControllerServer) processHostVolumeRemoteBackups(
 		listOptions.LabelSelector = fmt.Sprintf("%s=%s", labelBackupSrcVol, req.GetSourceVolumeId())
 	}
 
+	// VolumeRemoteBackups are not guaranteed to live in the CSI driver's namespace,
+	// so ListSnapshots must query across all namespaces to avoid missing backup snapshots.
 	vrbList, err := cs.listHostVolumeRemoteBackups(ctx, "", listOptions)
 	if err != nil {
 		return nil, err
