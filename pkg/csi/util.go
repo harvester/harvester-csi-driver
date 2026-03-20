@@ -145,9 +145,9 @@ func formatBackupSnapshotID(namespace, name string) string {
 // parseSnapshotID parses a snapshot ID and returns whether it's a backup snapshot and the name
 // Format: "backup:<namespace>/<name>" for backup snapshots, or just "<name>" for regular snapshots
 func parseSnapshotID(snapshotID string) (isBackup bool, namespace, name string) {
-	if strings.HasPrefix(snapshotID, "backup:") {
+	if after, ok := strings.CutPrefix(snapshotID, "backup:"); ok {
 		// Parse backup format: backup:<namespace>/<name>
-		parts := strings.SplitN(strings.TrimPrefix(snapshotID, "backup:"), "/", 2)
+		parts := strings.SplitN(after, "/", 2)
 		if len(parts) == 2 {
 			return true, parts[0], parts[1]
 		}

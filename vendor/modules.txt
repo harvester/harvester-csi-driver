@@ -133,13 +133,8 @@ github.com/gorilla/websocket
 github.com/harvester/go-common/command
 github.com/harvester/go-common/common
 github.com/harvester/go-common/ds
-<<<<<<< HEAD
 # github.com/harvester/harvester v1.8.0-dev-20260301.0.20260320020150-7f502747a4cc
 ## explicit; go 1.25.7
-=======
-# github.com/harvester/harvester v1.7.0-dev-20251026.0.20251028055051-a9efdf23d3a3 => github.com/WebberHuang1118/harvester v0.0.0-20260302072803-26473c1be4c7
-## explicit; go 1.25
->>>>>>> f3105d6f (feat: harvester renamae remote backup restore CR)
 github.com/harvester/harvester/pkg/apis/harvesterhci.io
 github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1
 github.com/harvester/harvester/pkg/generated/clientset/versioned

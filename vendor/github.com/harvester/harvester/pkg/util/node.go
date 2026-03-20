@@ -17,18 +17,6 @@ const (
 	PromoteStatusFailed   = "failed"
 )
 
-const (
-	KubeNodeRoleLabelPrefix      = "node-role.kubernetes.io/"
-	KubeMasterNodeLabelKey       = KubeNodeRoleLabelPrefix + "master"
-	KubeControlPlaneNodeLabelKey = KubeNodeRoleLabelPrefix + "control-plane"
-	KubeEtcdNodeLabelKey         = KubeNodeRoleLabelPrefix + "etcd"
-
-	PromoteStatusComplete = "complete"
-	PromoteStatusRunning  = "running"
-	PromoteStatusUnknown  = "unknown"
-	PromoteStatusFailed   = "failed"
-)
-
 func ExcludeWitnessNodes(nodes []*corev1.Node) []*corev1.Node {
 	nonWitnessNodes := make([]*corev1.Node, 0, len(nodes))
 	for _, node := range nodes {
