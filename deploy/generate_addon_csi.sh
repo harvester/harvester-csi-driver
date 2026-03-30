@@ -31,6 +31,7 @@ SERVICE_ACCOUNT_NAME=$1
 NAMESPACE=$2
 ROLE_BINDING_NAME=$NAMESPACE-$SERVICE_ACCOUNT_NAME
 CLUSTER_ROLE_NAME="harvesterhci.io:cloudprovider"
+CSI_DRIVER_ROLE_NAME="harvesterhci.io:csi-driver"
 KUBECFG_FILE_NAME="./tmp/kube/k8s-${SERVICE_ACCOUNT_NAME}-${NAMESPACE}-conf"
 TARGET_FOLDER="./tmp/kube"
 
@@ -49,6 +50,11 @@ create_service_account() {
 create_rolebinding() {
   echo -e "\\nCreating a rolebinding in ${NAMESPACE} namespace: ${ROLE_BINDING_NAME}"
   kubectl create rolebinding "${ROLE_BINDING_NAME}" --serviceaccount="${NAMESPACE}:${SERVICE_ACCOUNT_NAME}" --clusterrole="${CLUSTER_ROLE_NAME}" --namespace="${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+}
+
+create_clusterrolebinding() {
+  echo -e "\\nCreating a clusterrolebinding: ${ROLE_BINDING_NAME}"
+  kubectl create clusterrolebinding "${ROLE_BINDING_NAME}" --serviceaccount="${NAMESPACE}:${SERVICE_ACCOUNT_NAME}" --clusterrole="${CSI_DRIVER_ROLE_NAME}" --dry-run=client -o yaml | kubectl apply -f -
 }
 
 get_secret_name_from_service_account() {
@@ -187,6 +193,7 @@ generate_cloud_config() {
 create_target_folder
 create_service_account
 create_rolebinding
+create_clusterrolebinding
 get_secret_name_from_service_account
 extract_ca_crt_from_secret
 get_user_token_from_secret
