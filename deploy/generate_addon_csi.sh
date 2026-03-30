@@ -18,7 +18,6 @@ if [[ -n "$3" ]]; then
   SCRIPT_TARGET=$3
 fi
 
-
 case $SCRIPT_TARGET in
   RKE1 | rke1 | RKE2 | rke2 | K3S | k3s)
 ;;
@@ -44,12 +43,12 @@ create_target_folder() {
 create_service_account() {
   echo -e "\\nCreating a service account in ${NAMESPACE} namespace: ${SERVICE_ACCOUNT_NAME}"
   # use kubectl apply to ignore AlreadyExists error
-  kubectl create sa "${SERVICE_ACCOUNT_NAME}" --namespace "${NAMESPACE}" --dry-run -o yaml | kubectl apply -f -
+  kubectl create sa "${SERVICE_ACCOUNT_NAME}" --namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 }
 
 create_rolebinding() {
   echo -e "\\nCreating a rolebinding in ${NAMESPACE} namespace: ${ROLE_BINDING_NAME}"
-  kubectl create rolebinding ${ROLE_BINDING_NAME} --serviceaccount=${NAMESPACE}:${SERVICE_ACCOUNT_NAME} --clusterrole=${CLUSTER_ROLE_NAME} --namespace=${NAMESPACE} --dry-run -o yaml | kubectl apply -f -
+  kubectl create rolebinding "${ROLE_BINDING_NAME}" --serviceaccount="${NAMESPACE}:${SERVICE_ACCOUNT_NAME}" --clusterrole="${CLUSTER_ROLE_NAME}" --namespace="${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 }
 
 get_secret_name_from_service_account() {
@@ -114,7 +113,7 @@ set_kube_config_values() {
   if [ $? -ne 0 ]; then
         echo "ENDPOINT not reachable!"
         exit 1
-  fi  
+  fi
   echo "Endpoint: ${ENDPOINT}"
 
   # Set up the config
@@ -163,7 +162,7 @@ $kubeconfig
   addons_include:
   - https://raw.githubusercontent.com/harvester/harvester-csi-driver/master/deploy/manifests/deployment.yaml
   "
-  rm -rf ${TARGET_FOLDER}
+  rm -rf "${TARGET_FOLDER}"
 }
 
 generate_cloud_config() {
@@ -182,7 +181,7 @@ generate_cloud_config() {
     owner: root:root
     path: /var/lib/rancher/rke2/etc/config-files/cloud-provider-config
     permissions: '0644'"
-  rm -r ${TARGET_FOLDER}
+  rm -rf "${TARGET_FOLDER}"
 }
 
 create_target_folder
