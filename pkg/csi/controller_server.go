@@ -47,7 +47,7 @@ const (
 	paramHostVolMode        = "hostVolumeMode"
 	paramSnapshotType       = "type"
 	snapshotTypeBackup      = "backup"
-	LHBackup                = "lh"
+	LHBackup                = harvesterv1beta1.VolumeRemoteBackupLH
 	longhornProvisioner     = "driver.longhorn.io"
 	annoFSVolumeForVM       = "harvesterhci.io/volumeForVirtualMachine"
 	labelSnapHostSC         = "harvesterhci.io/snapHostSC"
@@ -1381,10 +1381,11 @@ func (cs *ControllerServer) prepareBackupSnapResponse(
 	}, nil
 }
 
-// generateHostVolumeRemoteBackupManifest generates a VolumeRemoteBackup manifest specification
-func (cs *ControllerServer) generateHostVolumeRemoteBackupManifest(
+// buildHostVolumeRemoteBackup builds a VolumeRemoteBackup specification
+func (cs *ControllerServer) buildHostVolumeRemoteBackup(
 	name,
 	sourceVolumeID string,
+	backupType harvesterv1beta1.VolumeRemoteBackupType,
 ) (*harvesterv1beta1.VolumeRemoteBackup, error) {
 	labels := map[string]string{
 		labelBackupSrcVol: sourceVolumeID,
@@ -1397,7 +1398,7 @@ func (cs *ControllerServer) generateHostVolumeRemoteBackupManifest(
 			Labels:    labels,
 		},
 		Spec: harvesterv1beta1.VolumeRemoteBackupSpec{
-			Type:   LHBackup,
+			Type:   backupType,
 			Source: sourceVolumeID,
 		},
 	}
@@ -1409,7 +1410,7 @@ func (cs *ControllerServer) generateHostVolumeRemoteBackup(
 	ctx context.Context,
 	name, sourceVolumeID string,
 ) (*harvesterv1beta1.VolumeRemoteBackup, error) {
-	hostVrb, err := cs.generateHostVolumeRemoteBackupManifest(name, sourceVolumeID)
+	hostVrb, err := cs.buildHostVolumeRemoteBackup(name, sourceVolumeID, LHBackup)
 	if err != nil {
 		return nil, err
 	}
