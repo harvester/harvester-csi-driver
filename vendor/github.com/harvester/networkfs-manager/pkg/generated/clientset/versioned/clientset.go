@@ -1,5 +1,5 @@
 /*
-Copyright 2025 Rancher Labs, Inc.
+Copyright 2026 SUSE, LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,8 +19,8 @@ limitations under the License.
 package versioned
 
 import (
-	"fmt"
-	"net/http"
+	fmt "fmt"
+	http "net/http"
 
 	harvesterhciv1beta1 "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned/typed/harvesterhci.io/v1beta1"
 	longhornv1beta2 "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned/typed/longhorn.io/v1beta2"

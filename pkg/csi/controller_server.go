@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -46,6 +47,7 @@ const (
 	paramHostSC             = "hostStorageClass"
 	paramHostVolMode        = "hostVolumeMode"
 	paramSnapshotType       = "type"
+	paramStaticMnt          = "static-mnt"
 	snapshotTypeBackup      = "backup"
 	LHBackup                = harvesterv1beta1.VolumeRemoteBackupLH
 	longhornProvisioner     = "driver.longhorn.io"
@@ -56,6 +58,7 @@ const (
 	LonghornNS              = "longhorn-system"
 	HarvesterNS             = "harvester-system"
 	VolumeSnapshotKind      = "VolumeSnapshot"
+	staticMountLHInterface  = "lhnet2"
 )
 
 type ControllerServer struct {
@@ -484,7 +487,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 
 		// that means the longhorn RWX volume (NFS), we need to create networkfilesystem CRD
-		if err := cs.createNetworkFilesystem(resPVC.Spec.VolumeName); err != nil {
+		if err := cs.createNetworkFilesystem(resPVC.Spec.VolumeName, volumeParameters); err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to create NetworkFileSystem for volume %s: %v", resPVC.Name, err)
 		}
 	}
@@ -499,11 +502,12 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}, nil
 }
 
-func (cs *ControllerServer) createNetworkFilesystem(volumeName string) error {
+func (cs *ControllerServer) createNetworkFilesystem(volumeName string, volumeParameters map[string]string) error {
 	networkfilesystem := &networkfsv1.NetworkFilesystem{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      volumeName,
-			Namespace: HarvesterNS,
+			Name:        volumeName,
+			Namespace:   HarvesterNS,
+			Annotations: getNetworkFilesystemAnnotations(volumeParameters),
 		},
 		Spec: networkfsv1.NetworkFSSpec{
 			NetworkFSName: volumeName,
@@ -517,6 +521,23 @@ func (cs *ControllerServer) createNetworkFilesystem(volumeName string) error {
 		}
 	}
 	return nil
+}
+
+func getNetworkFilesystemAnnotations(volumeParameters map[string]string) map[string]string {
+	if len(volumeParameters) == 0 {
+		return nil
+	}
+
+	annotations := map[string]string{}
+	enabled, _ := strconv.ParseBool(volumeParameters[paramStaticMnt])
+	if enabled {
+		annotations[util.ShareManagerStaticIPAnnotation] = "true"
+		annotations[util.ShareManagerIfaceAnnotation] = staticMountLHInterface
+	}
+	if len(annotations) == 0 {
+		return nil
+	}
+	return annotations
 }
 
 func (cs *ControllerServer) buildHostVolumeRemoteRestore(
@@ -693,7 +714,7 @@ func (cs *ControllerServer) ControllerPublishVolume(_ context.Context, req *csi.
 	// do no-op here with RWX volume
 	if volumeCapability.AccessMode.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
 		if cs.isLHRWXVolume(pvc) {
-			return cs.publishRWXVolume(pvc)
+			return cs.publishRWXVolume(pvc, req.GetVolumeContext())
 		}
 		logrus.Info("Do no-op for non-LH RWX volume")
 		return &csi.ControllerPublishVolumeResponse{}, nil
@@ -1936,21 +1957,16 @@ func (cs *ControllerServer) validateOnlineExpansion(ctx context.Context, pvc *co
 	return nil
 }
 
-func (cs *ControllerServer) publishRWXVolume(pvc *corev1.PersistentVolumeClaim) (*csi.ControllerPublishVolumeResponse, error) {
+func (cs *ControllerServer) publishRWXVolume(
+	pvc *corev1.PersistentVolumeClaim,
+	volumeParameters map[string]string,
+) (*csi.ControllerPublishVolumeResponse, error) {
 	networkfs, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), pvc.Spec.VolumeName, metav1.GetOptions{})
-	if err != nil && !errors.IsNotFound(err) {
-		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
-	}
-
-	// ensure the corresponding host pvc was not under deleting
-	pvcExistsAndNotDeleting := pvc != nil && pvc.ObjectMeta.DeletionTimestamp == nil
-	if errors.IsNotFound(err) && pvcExistsAndNotDeleting {
-		// give a chance to create the networkfilesystem if not found
-		logrus.Infof("NetworkFileSystem %s not found, creating it now", pvc.Spec.VolumeName)
-		if err := cs.createNetworkFilesystem(pvc.Spec.VolumeName); err != nil {
-			return nil, status.Errorf(codes.Internal, "Failed to create NetworkFileSystem for volume %s: %v", pvc.Name, err)
+	if err != nil {
+		if errors.IsNotFound(err) && pvc.ObjectMeta.DeletionTimestamp == nil {
+			return cs.recreateRWXNetworkFilesystem(pvc, volumeParameters)
 		}
-		return nil, status.Errorf(codes.Internal, "NetworkFileSystem %s is being recreated, retry in next reconciliation", pvc.Spec.VolumeName)
+		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
 	}
 
 	if networkfs.Spec.DesiredState == networkfsv1.NetworkFSStateEnabled || networkfs.Status.State == networkfsv1.NetworkFSStateEnabling {
@@ -1963,6 +1979,19 @@ func (cs *ControllerServer) publishRWXVolume(pvc *corev1.PersistentVolumeClaim) 
 		return nil, status.Errorf(codes.Internal, "Failed to enable NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
 	}
 	return &csi.ControllerPublishVolumeResponse{}, nil
+}
+
+func (cs *ControllerServer) recreateRWXNetworkFilesystem(
+	pvc *corev1.PersistentVolumeClaim,
+	volumeParameters map[string]string,
+) (*csi.ControllerPublishVolumeResponse, error) {
+	logrus.Infof("NetworkFileSystem %s not found, creating it now", pvc.Spec.VolumeName)
+
+	if err := cs.createNetworkFilesystem(pvc.Spec.VolumeName, volumeParameters); err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to create NetworkFileSystem for volume %s: %v", pvc.Name, err)
+	}
+
+	return nil, status.Errorf(codes.Internal, "NetworkFileSystem %s is being recreated, retry in next reconciliation", pvc.Spec.VolumeName)
 }
 
 func (cs *ControllerServer) unpublishRWXVolume(pvc *corev1.PersistentVolumeClaim) (*csi.ControllerUnpublishVolumeResponse, error) {

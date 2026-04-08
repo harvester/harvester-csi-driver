@@ -21,7 +21,6 @@ const (
 	AnnotationSVMBackupID               = prefix + "/svmbackupId"
 	AnnotationSVMBackupSkipCronCheck    = prefix + "/svmbackupSkipCronCheck"
 	AnnotationGoldenImage               = prefix + "/goldenImage"
-	AnnotationVolForVM                  = prefix + "/volumeForVirtualMachine"
 	LabelImageDisplayName               = prefix + "/imageDisplayName"
 	LabelSetting                        = prefix + "/setting"
 	LabelVMName                         = prefix + "/vmName"
@@ -141,8 +140,6 @@ const (
 	// CDI constants
 	CSIProvisionerLVM      = "lvm.driver.harvesterhci.io"
 	CSIProvisionerLonghorn = "driver.longhorn.io"
-	KindVolumeImportSource = "VolumeImportSource"
-	ImportSourceFSBlank    = "filesystem-blank-source"
 	LVMTopologyNodeKey     = "topology.lvm.csi/node"
 
 	// CSI constants
@@ -265,6 +262,15 @@ const (
 
 	StorageNetworkNetAttachDefPrefix    = "storagenetwork-"
 	StorageNetworkNetAttachDefNamespace = HarvesterSystemNamespaceName
+	StorageNetworkStaticNADName         = StorageNetworkNetAttachDefPrefix + "static"
+	IPPoolUsageDefaultReservedIPCount   = 8
+
+	ShareManagerStaticIPAnnotation       = "rwx-harvester-csi.harvesterhci.io/static-ip"
+	ShareManagerIfaceAnnotation          = "rwx-harvester-csi.harvesterhci.io/interface"
+	ShareManagerIPAnnotation             = "rwx-harvester-csi.harvesterhci.io/ip"
+	ShareManagerNADAnnotation            = "rwx-harvester-csi.harvesterhci.io/nad"
+	ShareManagerStaticNADAnnotation      = "rwx-harvester-csi.harvesterhci.io/static-nad"
+	ShareManagerStaticIPStatusAnnotation = "rwx-harvester-csi.harvesterhci.io/static-ip-status"
 
 	RWXNetworkAnnotation       = "rwx-network.settings.harvesterhci.io"
 	RWXHashNetworkAnnotation   = RWXNetworkAnnotation + "/hash"
