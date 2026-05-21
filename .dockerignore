@@ -1,2 +1,9 @@
-./.dapper
-./.cache
+.git
+.dapper
+.dapper.tmp
+.cache
+.docker
+bin
+*.swp
+.idea
+Dockerfile.dapper*

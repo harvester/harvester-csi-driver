@@ -1,11 +1,24 @@
 #!/bin/bash
 
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+TOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_VERSION_ENV="${_VERSION_ENV:-${TOP_DIR}/scripts/.version_env}"
+
+if ! git -C "${TOP_DIR}" rev-parse HEAD >/dev/null 2>&1; then
+    if [ -f "${_VERSION_ENV}" ]; then
+        # shellcheck disable=SC1090
+        . "${_VERSION_ENV}"
+        return 0 2>/dev/null || exit 0
+    fi
+    echo "scripts/version: no git available and no ${_VERSION_ENV}; run 'make gen-version-env' on a host with git first" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
+if [ -n "$(git -C "${TOP_DIR}" status --porcelain --untracked-files=no)" ]; then
     DIRTY="-dirty"
 fi
 
-COMMIT=$(git rev-parse --short HEAD)
-GIT_TAG=${DRONE_TAG:-$(git tag -l --contains HEAD | head -n 1)}
+COMMIT=$(git -C "${TOP_DIR}" rev-parse --short HEAD)
+GIT_TAG=${DRONE_TAG:-$(git -C "${TOP_DIR}" tag -l --contains HEAD | head -n 1)}
 
 if [[ -z "$DIRTY" && -n "$GIT_TAG" ]]; then
     VERSION=$GIT_TAG
@@ -14,7 +27,7 @@ else
 fi
 
 if [ -z "$ARCH" ]; then
-    ARCH=$(go env GOHOSTARCH)
+    ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 fi
 
 SUFFIX="-${ARCH}"
@@ -22,6 +35,17 @@ SUFFIX="-${ARCH}"
 TAG=${TAG:-${VERSION}${SUFFIX}}
 REPO=${REPO:-harvester}
 
-if echo $TAG | grep -q dirty; then
+if echo "$TAG" | grep -q dirty; then
     TAG=dev
 fi
+
+cat > "${_VERSION_ENV}" <<EOF
+DIRTY="${DIRTY}"
+COMMIT="${COMMIT}"
+GIT_TAG="${GIT_TAG}"
+VERSION="${VERSION}"
+ARCH="${ARCH}"
+SUFFIX="${SUFFIX}"
+TAG="${TAG}"
+REPO="${REPO}"
+EOF

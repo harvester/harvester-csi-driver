@@ -15,6 +15,6 @@ RUN if [ "$TARGETPLATFORM" != "linux/amd64" ] && [ "$TARGETPLATFORM" != "linux/a
 
 ENV ARCH=${TARGETPLATFORM#linux/}
 
-COPY bin/harvester-csi-driver-${ARCH} /usr/bin/harvester-csi-driver
+COPY --from=bin harvester-csi-driver-${ARCH} /usr/bin/harvester-csi-driver
 
 ENTRYPOINT ["/usr/bin/harvester-csi-driver"]
