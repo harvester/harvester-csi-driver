@@ -1,6 +1,6 @@
 module github.com/harvester/harvester-csi-driver
 
-go 1.25.7
+go 1.26
 
 replace (
 	github.com/google/gnostic-models => github.com/google/gnostic-models v0.6.9
