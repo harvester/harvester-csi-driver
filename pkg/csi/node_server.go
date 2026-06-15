@@ -123,13 +123,9 @@ func (ns *NodeServer) nodeStageRWXVolume(req *csi.NodeStageVolumeRequest) (*csi.
 	logrus.Debugf("target args: %v", args)
 
 	// do mount
-	nspace := common.GetHostNamespacePath("/proc")
-	executor, err := cmd.NewExecutorWithNS(nspace)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not create executor: %v", err)
-	}
+	mounter := mount.New("")
 	logrus.Infof("Mounting volume %s to %s", req.VolumeId, stagingTargetPath)
-	_, err = executor.Execute("mount", args)
+	err = mounter.Mount(export, stagingTargetPath, "nfs", strings.Split(mountOpts, ","))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not mount %v for global path: %v", export, err)
 	}
@@ -149,21 +145,46 @@ func (ns *NodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageV
 		return nil, status.Errorf(codes.Internal, "Could not create executor: %v", err)
 	}
 
+	mounter := mount.New("")
+
 	logrus.Infof("Unmounting volume %s from %s", req.VolumeId, stagingTargetPath)
-	out, err := executor.Execute("mountpoint", []string{stagingTargetPath})
+	notMount, err := mounter.IsLikelyNotMountPoint(stagingTargetPath)
 	if err != nil {
-		if strings.Contains(err.Error(), "is not a mountpoint") {
+
+		if os.IsNotExist(err) {
 			logrus.Infof("Volume %s is not mounted at %s, return directly.", req.VolumeId, stagingTargetPath)
 			return &csi.NodeUnstageVolumeResponse{}, nil
 		}
-		return nil, status.Errorf(codes.Internal, "Could not check mountpoint %v: %v", stagingTargetPath, err)
-	}
-	if !strings.Contains(out, "is a mountpoint") {
-		return &csi.NodeUnstageVolumeResponse{}, nil
+
+		// Fallback to check mountpoint command
+		logrus.Infof("Failed to check mountpoint %v: %v, fallback to check mountpoint command", stagingTargetPath, err)
+
+		out, err := executor.Execute("mountpoint", []string{stagingTargetPath})
+		if err != nil {
+			if strings.Contains(err.Error(), "is not a mountpoint") {
+				logrus.Infof("Volume %s is not mounted at %s, return directly.", req.VolumeId, stagingTargetPath)
+				return &csi.NodeUnstageVolumeResponse{}, nil
+			}
+			return nil, status.Errorf(codes.Internal, "Could not check mountpoint %v: %v", stagingTargetPath, err)
+		}
+		if !strings.Contains(out, "is a mountpoint") {
+			return &csi.NodeUnstageVolumeResponse{}, nil
+		}
+
+		notMount = false
+
 	}
 
-	if _, err := executor.Execute("umount", []string{stagingTargetPath}); err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not unmount %v: %v", stagingTargetPath, err)
+	if !notMount {
+		err := mounter.Unmount(stagingTargetPath)
+		if err != nil {
+			// Fallback to umount command
+			logrus.Infof("Failed to unmount %v: %v, fallback to umount command", stagingTargetPath, err)
+
+			if _, err := executor.Execute("umount", []string{stagingTargetPath}); err != nil {
+				return nil, status.Errorf(codes.Internal, "Could not unmount %v: %v", stagingTargetPath, err)
+			}
+		}
 	}
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
