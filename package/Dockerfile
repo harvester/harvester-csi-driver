@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7.0
 
-FROM registry.suse.com/bci/bci-base:16.0
+FROM registry.suse.com/bci/bci-base:16.1
 
 # util-linux: for mount related commands
 RUN zypper update --no-confirm && \
