@@ -30,7 +30,7 @@ replace (
 )
 
 require (
-	github.com/container-storage-interface/spec v1.11.0
+	github.com/container-storage-interface/spec v1.12.0
 	github.com/harvester/go-common v0.0.0-20260119194217-0f17176ce67e
 	github.com/harvester/harvester v1.8.0
 	github.com/harvester/networkfs-manager v1.6.1
