@@ -42,7 +42,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli v1.22.17
 	golang.org/x/mod v0.32.0
-	golang.org/x/sys v0.40.0
+	golang.org/x/sys v0.46.0
 	google.golang.org/grpc v1.79.3
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
