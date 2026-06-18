@@ -31,7 +31,7 @@ replace (
 
 require (
 	github.com/container-storage-interface/spec v1.11.0
-	github.com/harvester/go-common v0.0.0-20260119194217-0f17176ce67e
+	github.com/harvester/go-common v0.0.0-20260609110837-30467f751774
 	github.com/harvester/harvester v1.8.0
 	github.com/harvester/networkfs-manager v1.6.1
 	github.com/kubernetes-csi/csi-lib-utils v0.22.0

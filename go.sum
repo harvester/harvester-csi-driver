@@ -169,8 +169,8 @@ github.com/gorilla/handlers v1.5.2/go.mod h1:dX+xVpaxdSw+q0Qek8SSsl3dfMk3jNddUkM
 github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 h1:JeSE6pjso5THxAzdVpqr6/geYxZytqFMBCOtn/ujyeo=
 github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674/go.mod h1:r4w70xmWCQKmi1ONH4KIaBptdivuRPyosB9RmPlGEwA=
 github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79/go.mod h1:FecbI9+v66THATjSRHfNgh1IVFe/9kFxbXtjV0ctIMA=
-github.com/harvester/go-common v0.0.0-20260119194217-0f17176ce67e h1:0oo0OL30xJJ5uxu3RAFDvAGAzBT4VlKUiCA2yvOwHR4=
-github.com/harvester/go-common v0.0.0-20260119194217-0f17176ce67e/go.mod h1:r0hTaF8ZSSJEN7slrEzeJ80H66MPy+xFv3aScrxhLGI=
+github.com/harvester/go-common v0.0.0-20260609110837-30467f751774 h1:UpQEeBQH5QXtAK9iiw4U4F+MjIUSeRx64oVy1fKCysU=
+github.com/harvester/go-common v0.0.0-20260609110837-30467f751774/go.mod h1:H2t/qPVoVCTi6/0YeffpaKK4WWhjN9pFefbiMTaI7jg=
 github.com/harvester/harvester v1.8.0 h1:jOb1Kzu5TlAZ+QT6XlAPftyppOrdEZL1UfhDUn2ix4s=
 github.com/harvester/harvester v1.8.0/go.mod h1:1vlg1+mB8OHb9Meu+kMVOO/sG9130RE6+y3V1u1TXk4=
 github.com/harvester/harvester-network-controller v1.6.0-rc3 h1:lHpsxalwOboV5UaBL7T/XcV3Ib86VioyEju2J11/kUk=

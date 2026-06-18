@@ -174,8 +174,8 @@ github.com/gorilla/handlers
 # github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 ## explicit; go 1.20
 github.com/gorilla/websocket
-# github.com/harvester/go-common v0.0.0-20260119194217-0f17176ce67e
-## explicit; go 1.25
+# github.com/harvester/go-common v0.0.0-20260609110837-30467f751774
+## explicit; go 1.25.7
 github.com/harvester/go-common/command
 github.com/harvester/go-common/common
 github.com/harvester/go-common/ds
