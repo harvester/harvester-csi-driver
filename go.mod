@@ -39,7 +39,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/rancher/wrangler v1.1.2
 	github.com/rancher/wrangler/v3 v3.2.4
-	github.com/sirupsen/logrus v1.9.3
+	github.com/sirupsen/logrus v1.9.4
 	github.com/urfave/cli v1.22.17
 	golang.org/x/mod v0.32.0
 	golang.org/x/sys v0.40.0
