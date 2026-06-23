@@ -2,7 +2,8 @@
 # check=skip=InvalidDefaultArgInFrom
 
 # ---- builder ----
-FROM registry.suse.com/bci/golang:1.26.0 AS builder
+FROM registry.suse.com/bci/golang:1.26 AS builder
+ENV GOTOOLCHAIN=auto
 
 ARG MK_HOST_ARCH
 ENV ARCH=${MK_HOST_ARCH}
