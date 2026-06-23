@@ -41,7 +41,7 @@ require (
 	github.com/rancher/wrangler/v3 v3.2.4
 	github.com/sirupsen/logrus v1.9.4
 	github.com/urfave/cli v1.22.17
-	golang.org/x/mod v0.32.0
+	golang.org/x/mod v0.37.0
 	golang.org/x/sys v0.40.0
 	google.golang.org/grpc v1.79.3
 	k8s.io/api v0.34.1
