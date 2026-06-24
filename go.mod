@@ -4,29 +4,29 @@ go 1.26
 
 replace (
 	github.com/google/gnostic-models => github.com/google/gnostic-models v0.6.9
-	k8s.io/api => k8s.io/api v0.33.7
-	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.33.7
-	k8s.io/apimachinery => k8s.io/apimachinery v0.33.7
-	k8s.io/client-go => k8s.io/client-go v0.33.7
-	k8s.io/cloud-provider => k8s.io/cloud-provider v0.33.7
-	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.33.7
-	k8s.io/code-generator => k8s.io/code-generator v0.33.7
-	k8s.io/cri-api => k8s.io/cri-api v0.33.7
-	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.33.7
-	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.33.7
-	k8s.io/endpointslice => k8s.io/endpointslice v0.33.7
-	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.33.7
-	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff
-	k8s.io/kube-proxy => k8s.io/kube-proxy v0.33.7
-	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.33.7
-	k8s.io/kubectl => k8s.io/kubectl v0.33.7
-	k8s.io/kubelet => k8s.io/kubelet v0.33.7
+	k8s.io/api => k8s.io/api v0.36.2
+	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.36.2
+	k8s.io/apimachinery => k8s.io/apimachinery v0.36.2
+	k8s.io/client-go => k8s.io/client-go v0.36.2
+	k8s.io/cloud-provider => k8s.io/cloud-provider v0.36.2
+	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.36.2
+	k8s.io/code-generator => k8s.io/code-generator v0.36.2
+	k8s.io/cri-api => k8s.io/cri-api v0.36.2
+	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.36.2
+	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.36.2
+	k8s.io/endpointslice => k8s.io/endpointslice v0.36.2
+	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.36.2
+	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20260624041617-8f3fa4921821
+	k8s.io/kube-proxy => k8s.io/kube-proxy v0.36.2
+	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.36.2
+	k8s.io/kubectl => k8s.io/kubectl v0.36.2
+	k8s.io/kubelet => k8s.io/kubelet v0.36.2
 	k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.33.7
-	k8s.io/metrics => k8s.io/metrics v0.33.7
-	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.33.7
-	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.33.7
+	k8s.io/metrics => k8s.io/metrics v0.36.2
+	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.36.2
+	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.36.2
 
-	sigs.k8s.io/cluster-api => sigs.k8s.io/cluster-api v1.6.8
+	sigs.k8s.io/cluster-api => sigs.k8s.io/cluster-api v1.13.3
 )
 
 require (
@@ -38,18 +38,18 @@ require (
 	github.com/longhorn/longhorn-manager v1.10.0
 	github.com/pkg/errors v0.9.1
 	github.com/rancher/wrangler v1.1.2
-	github.com/rancher/wrangler/v3 v3.2.4
+	github.com/rancher/wrangler/v3 v3.7.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/urfave/cli v1.22.17
 	golang.org/x/mod v0.32.0
 	golang.org/x/sys v0.40.0
 	google.golang.org/grpc v1.79.3
-	k8s.io/api v0.34.1
-	k8s.io/apimachinery v0.34.1
+	k8s.io/api v0.36.2
+	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/kubernetes v1.34.1
-	k8s.io/mount-utils v0.34.1
-	k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d
+	k8s.io/mount-utils v0.36.2
+	k8s.io/utils v0.0.0-20260617174310-a95e086a2553
 	kubevirt.io/api v1.7.0
 	kubevirt.io/client-go v1.7.0
 )
@@ -194,8 +194,8 @@ replace (
 	github.com/operator-framework/operator-lifecycle-manager => github.com/operator-framework/operator-lifecycle-manager v0.0.0-20190128024246-5eb7ae5bdb7a
 	github.com/rancher/lasso => github.com/rancher/lasso v0.0.0-20241202185148-04649f379358
 	github.com/rancher/rancher => github.com/rancher/rancher v0.0.0-20240919204204-3da2ae0cabd1
-	github.com/rancher/rancher/pkg/apis => github.com/rancher/rancher/pkg/apis v0.0.0-20240919204204-3da2ae0cabd1
-	github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20240919204204-3da2ae0cabd1
-	go.qase.io/client => github.com/rancher/qase-go/client v0.0.0-20231114201952-65195ec001fa
+	github.com/rancher/rancher/pkg/apis => github.com/rancher/rancher/pkg/apis v0.0.0-20260624083124-ece6c3f66990
+	github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20260624083124-ece6c3f66990
+	go.qase.io/client => github.com/rancher/qase-go/client v0.0.0-20250627195016-142ff3dfec16
 	helm.sh/helm/v3 => github.com/rancher/helm/v3 v3.15.1-rancher2
 )
