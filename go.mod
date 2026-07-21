@@ -185,7 +185,7 @@ require (
 )
 
 replace (
-	github.com/containerd/containerd => github.com/containerd/containerd v1.7.32
+	github.com/containerd/containerd => github.com/containerd/containerd v1.7.33
 	github.com/docker/distribution => github.com/docker/distribution v2.8.3+incompatible
 	github.com/docker/docker => github.com/docker/docker v25.0.16+incompatible
 	github.com/gin-gonic/gin => github.com/gin-gonic/gin v1.9.1
