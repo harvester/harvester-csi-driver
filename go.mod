@@ -43,7 +43,7 @@ require (
 	github.com/urfave/cli v1.22.17
 	golang.org/x/mod v0.40.0
 	golang.org/x/sys v0.47.0
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v12.0.0+incompatible
@@ -74,7 +74,7 @@ require (
 	go.uber.org/mock v0.5.2 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 )
 
