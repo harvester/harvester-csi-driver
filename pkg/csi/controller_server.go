@@ -568,7 +568,7 @@ func (cs *ControllerServer) deleteVolumeRemoteRestoreIfExists(ctx context.Contex
 	}
 
 	if err != nil {
-		logrus.Warnf("Failed to get VolumeRemoteRestore %s: %v, continuing with PVC deletion", volumeID, err)
+		logrus.Warnf("Failed to get VolumeRemoteRestore %s: %v", volumeID, err)
 		return false, err
 	}
 
@@ -593,22 +593,19 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.Internal, "Invalid delete volume req: %v", err)
 	}
 
-	// Check if there is a VolumeRemoteRestore with the same name as the volume and delete it
-	deleted, err := cs.deleteVolumeRemoteRestoreIfExists(ctx, req.GetVolumeId())
-	if err != nil {
-		return nil, err
-	}
-
-	if deleted {
-		return &csi.DeleteVolumeResponse{}, nil
+	// Check if there is a VolumeRemoteRestore with the same name as the volume and delete it.
+	// Deleting it is not sufficient on its own: the backing PVC must still be removed below,
+	// otherwise the host-side PVC is leaked once the guest PV is reclaimed.
+	if _, err := cs.deleteVolumeRemoteRestoreIfExists(ctx, req.GetVolumeId()); err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to delete VolumeRemoteRestore %s: %v", req.GetVolumeId(), err)
 	}
 
 	resPVC, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", req.GetVolumeId(), err)
-	}
 	if errors.IsNotFound(err) {
+		// The volume is already gone. DeleteVolume is required to be idempotent.
 		return &csi.DeleteVolumeResponse{}, nil
+	} else if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", req.GetVolumeId(), err)
 	}
 
 	// TODO: we need generalize the RWX volume on next release
