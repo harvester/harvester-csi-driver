@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -75,7 +76,7 @@ type ControllerServer struct {
 	virtClient      kubecli.KubevirtClient
 	lhClient        *lhclientset.Clientset
 	harvNetFSClient *harvnetworkfsset.Clientset
-	harvClient      *harvclient.Clientset
+	harvClient      harvclient.Interface
 	snapClient      *snapclient.Clientset
 
 	useDeclarativeHotplug bool
@@ -94,7 +95,7 @@ func NewControllerServer(
 	lhClient *lhclientset.Clientset,
 	kubeClient *kubernetes.Clientset,
 	harvNetFSClient *harvnetworkfsset.Clientset,
-	harvClient *harvclient.Clientset,
+	harvClient harvclient.Interface,
 	snapClient *snapclient.Clientset,
 	pods ctlv1.PodCache,
 	namespace string,
@@ -563,24 +564,30 @@ func (cs *ControllerServer) buildHostVolumeRemoteRestore(
 
 func (cs *ControllerServer) deleteVolumeRemoteRestoreIfExists(ctx context.Context, volumeID string) (bool, error) {
 	pr, err := cs.getHostVolumeRemoteRestore(ctx, cs.namespace, volumeID)
-	if errors.IsNotFound(err) {
+	switch {
+	case errors.IsNotFound(err):
+		// The volume was not provisioned from a backup, there is nothing to clean up.
 		return false, nil
-	}
-
-	if err != nil {
-		logrus.Warnf("Failed to get VolumeRemoteRestore %s: %v, continuing with PVC deletion", volumeID, err)
-		return false, err
+	case errors.IsForbidden(err) || meta.IsNoMatchError(err):
+		// continue with the PVC deletion instead of blocking it.
+		logrus.Warnf("VolumeRemoteRestore API unavailable for %s: %v, continuing with PVC deletion", volumeID, err)
+		return false, nil
+	case err != nil:
+		return false, status.Errorf(codes.Internal, "Failed to get VolumeRemoteRestore %s: %v", volumeID, err)
 	}
 
 	logrus.Infof("Found VolumeRemoteRestore %s/%s for volume %s, deleting it", pr.Namespace, pr.Name, volumeID)
-	err = cs.deleteHostVolumeRemoteRestore(ctx, cs.namespace, volumeID)
-	if err != nil {
-		return false, err
+	if err := cs.deleteHostVolumeRemoteRestore(ctx, cs.namespace, volumeID); errors.IsNotFound(err) {
+		// It was deleted concurrently between the get and the delete. Continue with the PVC
+		// deletion so a PVC that the cascading delete left behind is still removed.
+		logrus.Infof("VolumeRemoteRestore %s/%s is already gone, continuing with PVC deletion", cs.namespace, volumeID)
+		return false, nil
+	} else if err != nil {
+		return false, status.Errorf(codes.Internal, "Failed to delete VolumeRemoteRestore %s: %v", volumeID, err)
 	}
 
 	logrus.Infof("Successfully deleted VolumeRemoteRestore %s/%s", cs.namespace, volumeID)
 	return true, nil
-
 }
 
 func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
