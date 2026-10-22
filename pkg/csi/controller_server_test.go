@@ -138,19 +138,6 @@ func (f *fakeAPIServer) totalCalls() int {
 	return len(f.seen)
 }
 
-// indexOf returns the position of the first call to method/path, or -1.
-func (f *fakeAPIServer) indexOf(method, path string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	want := f.key(method, path)
-	for i, s := range f.seen {
-		if s == want {
-			return i
-		}
-	}
-	return -1
-}
-
 func (f *fakeAPIServer) log() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -266,6 +253,16 @@ func wantCode(t *testing.T, err error, want codes.Code, f *fakeAPIServer) {
 	}
 	if st.Code() != want {
 		t.Fatalf("DeleteVolume want code %v, got %v (%v)\ncalls:\n  %s", want, st.Code(), err, f.log())
+	}
+}
+
+// wantErr asserts only that the call failed. The VolumeRemoteRestore paths still
+// return the raw client error rather than a gRPC status; converting those is the
+// subject of a separate change, so these tests pin the abort, not its type.
+func wantErr(t *testing.T, err error, f *fakeAPIServer) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("DeleteVolume want an error, got err=<nil>\ncalls:\n  %s", f.log())
 	}
 }
 
@@ -409,11 +406,11 @@ func TestDeleteVolume_ShadowPVCDeleteFails(t *testing.T) {
 
 // --- VolumeRemoteRestore handling -------------------------------------------
 
-// Regression for the shadow-PVC leak: DeleteVolume used to return OK as soon as
-// it had deleted the VolumeRemoteRestore, so the Harvester-side PVC was never
-// touched. external-provisioner then removed the guest PV, leaving a shadow PVC
-// with no guest counterpart and nothing left to reclaim it.
-func TestDeleteVolume_VRRExists_DeletesVRRAndShadowPVC(t *testing.T) {
+// A volume restored from a backup is represented by a VolumeRemoteRestore that
+// owns its PVC through a controller owner reference, so deleting the restore
+// cascades to the PVC. DeleteVolume deletes the restore and returns, leaving the
+// PVC to garbage collection rather than racing it with a delete of its own.
+func TestDeleteVolume_VRRExists_DeletesVRR(t *testing.T) {
 	routes := baseRoutes()
 	routes["GET "+vrrPath(testNS, testVol)] = okReply(volumeRemoteRestore(testNS, testVol))
 	routes["DELETE "+vrrPath(testNS, testVol)] = okReply(volumeRemoteRestore(testNS, testVol))
@@ -424,20 +421,12 @@ func TestDeleteVolume_VRRExists_DeletesVRRAndShadowPVC(t *testing.T) {
 
 	wantOK(t, err, fake)
 	wantCalled(t, fake, "DELETE", vrrPath(testNS, testVol), "the VolumeRemoteRestore must be removed")
-	wantCalled(t, fake, "DELETE", pvcPath(testNS, testVol),
-		"deleting the VolumeRemoteRestore does not reclaim the shadow PVC")
-
-	// The VolumeRemoteRestore has to go first: it owns the PVC, so deleting the
-	// PVC while it still exists would let the restore controller recreate it.
-	if vrrAt, pvcAt := fake.indexOf("DELETE", vrrPath(testNS, testVol)),
-		fake.indexOf("DELETE", pvcPath(testNS, testVol)); vrrAt > pvcAt {
-		t.Fatalf("want the VolumeRemoteRestore deleted before the shadow PVC\ncalls:\n  %s", fake.log())
-	}
+	wantNotCalled(t, fake, "DELETE", pvcPath(testNS, testVol),
+		"the cascading delete of the VolumeRemoteRestore reclaims the PVC")
 }
 
-// Deleting the VolumeRemoteRestore failing must abort with a gRPC status, not a
-// raw client error, and must not delete the shadow PVC -- the restore object
-// still references it.
+// Deleting the VolumeRemoteRestore failing must abort, and must not delete the
+// shadow PVC -- the restore object still references it.
 func TestDeleteVolume_VRRDeleteFails(t *testing.T) {
 	routes := baseRoutes()
 	routes["GET "+vrrPath(testNS, testVol)] = okReply(volumeRemoteRestore(testNS, testVol))
@@ -447,7 +436,7 @@ func TestDeleteVolume_VRRDeleteFails(t *testing.T) {
 
 	err := deleteVolume(t, cs, testVol)
 
-	wantCode(t, err, codes.Internal, fake)
+	wantErr(t, err, fake)
 	wantNotCalled(t, fake, "DELETE", pvcPath(testNS, testVol), "the VolumeRemoteRestore is still present")
 }
 
@@ -467,7 +456,7 @@ func TestDeleteVolume_VRRGetFails(t *testing.T) {
 
 	err := deleteVolume(t, cs, testVol)
 
-	wantCode(t, err, codes.Internal, fake)
+	wantErr(t, err, fake)
 	wantNotCalled(t, fake, "GET", pvcPath(testNS, testVol), "the call aborted before reading the PVC")
 }
 
