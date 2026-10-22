@@ -586,6 +586,52 @@ func (f *fakeHarvClient) HarvesterhciV1beta1() harvtypedv1beta1.HarvesterhciV1be
 	return f.v1beta1
 }
 
+type fakeDiscovery struct {
+	resources *metav1.APIResourceList
+	err       error
+
+	calls int
+}
+
+func (f *fakeDiscovery) ServerResourcesForGroupVersion(_ string) (*metav1.APIResourceList, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.resources, nil
+}
+
+func harvesterAPIResources(names ...string) *metav1.APIResourceList {
+	list := &metav1.APIResourceList{GroupVersion: harvesterv1beta1.SchemeGroupVersion.String()}
+	for _, name := range names {
+		list.APIResources = append(list.APIResources, metav1.APIResource{Name: name})
+	}
+	return list
+}
+
+// discoveryWithVRR mimics Harvester v1.8 and later, which serves the VolumeRemoteRestore API.
+func discoveryWithVRR() *fakeDiscovery {
+	return &fakeDiscovery{resources: harvesterAPIResources("settings", "volumeremotebackups", volumeRemoteRestoreResource)}
+}
+
+// discoveryWithoutVRR mimics Harvester v1.7 and earlier: harvesterhci.io/v1beta1 is served,
+// but it has no volumeremoterestores resource in it.
+func discoveryWithoutVRR() *fakeDiscovery {
+	return &fakeDiscovery{resources: harvesterAPIResources("settings", "virtualmachineimages")}
+}
+
+// discoveryWithoutGroup mimics a host that does not serve harvesterhci.io/v1beta1 at all.
+func discoveryWithoutGroup() *fakeDiscovery {
+	return &fakeDiscovery{err: errors.NewNotFound(
+		schema.GroupResource{Group: "harvesterhci.io", Resource: "v1beta1"}, "")}
+}
+
+// discoveryUnavailable mimics discovery itself failing, which leaves the driver unable to tell
+// a pre-v1.8 host apart from a broken RBAC rule.
+func discoveryUnavailable() *fakeDiscovery {
+	return &fakeDiscovery{err: errors.NewServiceUnavailable("discovery is down")}
+}
+
 func (f *fakePVCController) Get(_, name string, _ metav1.GetOptions) (*corev1.PersistentVolumeClaim, error) {
 	f.getCalls++
 	if f.getErr != nil {
@@ -618,11 +664,16 @@ func blockPVC(name string) *corev1.PersistentVolumeClaim {
 	}
 }
 
-func newFakeClientControllerServer(vrrClient *fakeVRRClient, pvcController *fakePVCController) *ControllerServer {
+func newFakeClientControllerServer(
+	vrrClient *fakeVRRClient,
+	pvcController *fakePVCController,
+	discovery *fakeDiscovery,
+) *ControllerServer {
 	return &ControllerServer{
-		namespace:  testNamespace,
-		coreClient: &fakeCoreClient{pvcController: pvcController},
-		harvClient: &fakeHarvClient{v1beta1: &fakeHarvV1beta1Client{vrrClient: vrrClient}},
+		namespace:     testNamespace,
+		coreClient:    &fakeCoreClient{pvcController: pvcController},
+		harvClient:    &fakeHarvClient{v1beta1: &fakeHarvV1beta1Client{vrrClient: vrrClient}},
+		hostDiscovery: discovery,
 		caps: getControllerServiceCapabilities(
 			[]csi.ControllerServiceCapability_RPC_Type{
 				csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -632,13 +683,14 @@ func newFakeClientControllerServer(vrrClient *fakeVRRClient, pvcController *fake
 }
 
 // TestDeleteVolumeRemoteRestoreIfExists covers harvester/harvester#11905 BUG 2: a
-// VolumeRemoteRestore lookup that cannot succeed (RBAC denial, CRD not installed) must not
-// abort the volume deletion, while a possibly transient error must still be surfaced so the
-// external-provisioner retries.
+// VolumeRemoteRestore lookup that cannot succeed because the host does not serve the API must
+// not abort the volume deletion, while an error that may clear up on its own, and a denial on
+// a host that does serve the API, must still be surfaced so the external-provisioner retries.
 func TestDeleteVolumeRemoteRestoreIfExists(t *testing.T) {
 	testCases := []struct {
 		name            string
 		vrrClient       *fakeVRRClient
+		discovery       *fakeDiscovery
 		wantDeleted     bool
 		wantCode        codes.Code
 		wantDeleteCalls int
@@ -646,18 +698,45 @@ func TestDeleteVolumeRemoteRestoreIfExists(t *testing.T) {
 		{
 			name:      "no VolumeRemoteRestore exists",
 			vrrClient: &fakeVRRClient{},
+			discovery: discoveryWithVRR(),
 		},
 		{
-			name:      "lookup forbidden by missing RBAC",
+			// Harvester v1.7 and earlier evaluate RBAC before routing, so a host without the
+			// CRD answers 403 rather than 404. Discovery is what tells the two apart.
+			name:      "lookup forbidden on a host without the API",
 			vrrClient: &fakeVRRClient{getErr: errForbiddenVRR(testVolumeID)},
+			discovery: discoveryWithoutVRR(),
+		},
+		{
+			name:      "lookup forbidden on a host without the API group",
+			vrrClient: &fakeVRRClient{getErr: errForbiddenVRR(testVolumeID)},
+			discovery: discoveryWithoutGroup(),
+		},
+		{
+			// A supported host serves the API, so a denial is a stale or incomplete RBAC
+			// rule. Skipping it would orphan a VolumeRemoteRestore that really exists.
+			name:      "lookup forbidden on a host that serves the API",
+			vrrClient: &fakeVRRClient{getErr: errForbiddenVRR(testVolumeID)},
+			discovery: discoveryWithVRR(),
+			wantCode:  codes.Internal,
+		},
+		{
+			// Discovery could not confirm the API is missing, so the denial is not safe to
+			// skip either.
+			name:      "lookup forbidden and discovery is unavailable",
+			vrrClient: &fakeVRRClient{getErr: errForbiddenVRR(testVolumeID)},
+			discovery: discoveryUnavailable(),
+			wantCode:  codes.Internal,
 		},
 		{
 			name:      "VolumeRemoteRestore CRD is not installed",
 			vrrClient: &fakeVRRClient{getErr: errNoKindMatchVRR()},
+			discovery: discoveryWithVRR(),
 		},
 		{
 			name:      "lookup fails with a transient error",
 			vrrClient: &fakeVRRClient{getErr: errors.NewServerTimeout(vrrGroupResource, "get", 1)},
+			discovery: discoveryWithVRR(),
 			wantCode:  codes.Internal,
 		},
 		{
@@ -667,6 +746,7 @@ func TestDeleteVolumeRemoteRestoreIfExists(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testVolumeID},
 				},
 			},
+			discovery:       discoveryWithVRR(),
 			wantDeleted:     true,
 			wantDeleteCalls: 1,
 		},
@@ -680,6 +760,7 @@ func TestDeleteVolumeRemoteRestoreIfExists(t *testing.T) {
 				},
 				deleteErr: errors.NewNotFound(vrrGroupResource, testVolumeID),
 			},
+			discovery:       discoveryWithVRR(),
 			wantDeleteCalls: 1,
 		},
 		{
@@ -690,6 +771,7 @@ func TestDeleteVolumeRemoteRestoreIfExists(t *testing.T) {
 				},
 				deleteErr: errForbiddenVRR(testVolumeID),
 			},
+			discovery:       discoveryWithVRR(),
 			wantCode:        codes.Internal,
 			wantDeleteCalls: 1,
 		},
@@ -697,7 +779,7 @@ func TestDeleteVolumeRemoteRestoreIfExists(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cs := newFakeClientControllerServer(tc.vrrClient, &fakePVCController{})
+			cs := newFakeClientControllerServer(tc.vrrClient, &fakePVCController{}, tc.discovery)
 
 			deleted, err := cs.deleteVolumeRemoteRestoreIfExists(context.TODO(), testVolumeID)
 
@@ -715,6 +797,15 @@ func TestDeleteVolumeRemoteRestoreIfExists(t *testing.T) {
 			if tc.vrrClient.deleteCalls != tc.wantDeleteCalls {
 				t.Errorf("VolumeRemoteRestore Delete want calls=%d, got calls=%d", tc.wantDeleteCalls, tc.vrrClient.deleteCalls)
 			}
+			// Discovery is only consulted to disambiguate a denial, so it must stay off the
+			// path every other delete takes.
+			wantDiscoveryCalls := 0
+			if errors.IsForbidden(tc.vrrClient.getErr) {
+				wantDiscoveryCalls = 1
+			}
+			if tc.discovery.calls != wantDiscoveryCalls {
+				t.Errorf("discovery want calls=%d, got calls=%d", wantDiscoveryCalls, tc.discovery.calls)
+			}
 		})
 	}
 }
@@ -725,16 +816,24 @@ func TestDeleteVolumeRemoteRestoreIfExists(t *testing.T) {
 // guest PV stayed Released forever.
 func TestDeleteVolumeWithUnavailableVolumeRemoteRestoreAPI(t *testing.T) {
 	testCases := []struct {
-		name   string
-		getErr error
+		name      string
+		getErr    error
+		discovery *fakeDiscovery
 	}{
 		{
-			name:   "lookup forbidden by missing RBAC",
-			getErr: errForbiddenVRR(testVolumeID),
+			name:      "lookup forbidden on a host without the API",
+			getErr:    errForbiddenVRR(testVolumeID),
+			discovery: discoveryWithoutVRR(),
 		},
 		{
-			name:   "VolumeRemoteRestore CRD is not installed",
-			getErr: errNoKindMatchVRR(),
+			name:      "lookup forbidden on a host without the API group",
+			getErr:    errForbiddenVRR(testVolumeID),
+			discovery: discoveryWithoutGroup(),
+		},
+		{
+			name:      "VolumeRemoteRestore CRD is not installed",
+			getErr:    errNoKindMatchVRR(),
+			discovery: discoveryWithVRR(),
 		},
 	}
 
@@ -742,7 +841,7 @@ func TestDeleteVolumeWithUnavailableVolumeRemoteRestoreAPI(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			vrrClient := &fakeVRRClient{getErr: tc.getErr}
 			pvcController := &fakePVCController{pvc: blockPVC(testVolumeID)}
-			cs := newFakeClientControllerServer(vrrClient, pvcController)
+			cs := newFakeClientControllerServer(vrrClient, pvcController, tc.discovery)
 
 			resp, err := cs.DeleteVolume(context.TODO(), &csi.DeleteVolumeRequest{VolumeId: testVolumeID})
 
@@ -768,7 +867,7 @@ func TestDeleteVolumeWithUnavailableVolumeRemoteRestoreAPI(t *testing.T) {
 func TestDeleteVolumeWithTransientVolumeRemoteRestoreError(t *testing.T) {
 	vrrClient := &fakeVRRClient{getErr: errors.NewServerTimeout(vrrGroupResource, "get", 1)}
 	pvcController := &fakePVCController{pvc: blockPVC(testVolumeID)}
-	cs := newFakeClientControllerServer(vrrClient, pvcController)
+	cs := newFakeClientControllerServer(vrrClient, pvcController, discoveryWithVRR())
 
 	_, err := cs.DeleteVolume(context.TODO(), &csi.DeleteVolumeRequest{VolumeId: testVolumeID})
 	if gotCode := status.Code(err); gotCode != codes.Internal {
@@ -792,7 +891,7 @@ func TestDeleteVolumeDeletesVolumeRemoteRestore(t *testing.T) {
 		},
 	}
 	pvcController := &fakePVCController{pvc: blockPVC(testVolumeID)}
-	cs := newFakeClientControllerServer(vrrClient, pvcController)
+	cs := newFakeClientControllerServer(vrrClient, pvcController, discoveryWithVRR())
 
 	if _, err := cs.DeleteVolume(context.TODO(), &csi.DeleteVolumeRequest{VolumeId: testVolumeID}); err != nil {
 		t.Fatalf("DeleteVolume() want err=<nil>, got err=%v", err)
@@ -817,13 +916,32 @@ func TestDeleteVolumeWithConcurrentlyDeletedVolumeRemoteRestore(t *testing.T) {
 		deleteErr: errors.NewNotFound(vrrGroupResource, testVolumeID),
 	}
 	pvcController := &fakePVCController{pvc: blockPVC(testVolumeID)}
-	cs := newFakeClientControllerServer(vrrClient, pvcController)
+	cs := newFakeClientControllerServer(vrrClient, pvcController, discoveryWithVRR())
 
 	if _, err := cs.DeleteVolume(context.TODO(), &csi.DeleteVolumeRequest{VolumeId: testVolumeID}); err != nil {
 		t.Fatalf("DeleteVolume() want err=<nil>, got err=%v", err)
 	}
 	if pvcController.deleteCalls != 1 {
 		t.Errorf("PVC Delete want calls=1, got calls=%d", pvcController.deleteCalls)
+	}
+}
+
+// TestDeleteVolumeWithForbiddenLookupOnSupportedHost is the counterpart to
+// TestDeleteVolumeWithUnavailableVolumeRemoteRestoreAPI: on a host that does serve the API a
+// denial means the RBAC rule is wrong, not that the API is missing. Deleting the host PVC
+// anyway would leave the VolumeRemoteRestore behind to recreate it, so DeleteVolume has to
+// fail and let the external-provisioner retry.
+func TestDeleteVolumeWithForbiddenLookupOnSupportedHost(t *testing.T) {
+	vrrClient := &fakeVRRClient{getErr: errForbiddenVRR(testVolumeID)}
+	pvcController := &fakePVCController{pvc: blockPVC(testVolumeID)}
+	cs := newFakeClientControllerServer(vrrClient, pvcController, discoveryWithVRR())
+
+	_, err := cs.DeleteVolume(context.TODO(), &csi.DeleteVolumeRequest{VolumeId: testVolumeID})
+	if gotCode := status.Code(err); gotCode != codes.Internal {
+		t.Errorf("DeleteVolume() want code=%v, got code=%v (err=%v)", codes.Internal, gotCode, err)
+	}
+	if pvcController.deleteCalls != 0 {
+		t.Errorf("PVC Delete want calls=0, got calls=%d", pvcController.deleteCalls)
 	}
 }
 
@@ -835,22 +953,26 @@ func TestDeleteVolumeRemoteRestoreIfExistsLogging(t *testing.T) {
 	const unavailableMsg = "VolumeRemoteRestore API unavailable"
 
 	testCases := []struct {
-		name     string
-		getErr   error
-		wantWarn bool
+		name      string
+		getErr    error
+		discovery *fakeDiscovery
+		wantWarn  bool
 	}{
 		{
-			name: "no VolumeRemoteRestore exists",
+			name:      "no VolumeRemoteRestore exists",
+			discovery: discoveryWithVRR(),
 		},
 		{
-			name:     "lookup forbidden by missing RBAC",
-			getErr:   errForbiddenVRR(testVolumeID),
-			wantWarn: true,
+			name:      "lookup forbidden on a host without the API",
+			getErr:    errForbiddenVRR(testVolumeID),
+			discovery: discoveryWithoutVRR(),
+			wantWarn:  true,
 		},
 		{
-			name:     "VolumeRemoteRestore CRD is not installed",
-			getErr:   errNoKindMatchVRR(),
-			wantWarn: true,
+			name:      "VolumeRemoteRestore CRD is not installed",
+			getErr:    errNoKindMatchVRR(),
+			discovery: discoveryWithVRR(),
+			wantWarn:  true,
 		},
 	}
 
@@ -861,7 +983,7 @@ func TestDeleteVolumeRemoteRestoreIfExistsLogging(t *testing.T) {
 			logrus.SetOutput(&logs)
 			defer logrus.SetOutput(origOut)
 
-			cs := newFakeClientControllerServer(&fakeVRRClient{getErr: tc.getErr}, &fakePVCController{})
+			cs := newFakeClientControllerServer(&fakeVRRClient{getErr: tc.getErr}, &fakePVCController{}, tc.discovery)
 
 			if _, err := cs.deleteVolumeRemoteRestoreIfExists(context.TODO(), testVolumeID); err != nil {
 				t.Fatalf("deleteVolumeRemoteRestoreIfExists() want err=<nil>, got err=%v", err)
