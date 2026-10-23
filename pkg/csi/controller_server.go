@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,24 +39,25 @@ import (
 )
 
 const (
-	genericTimeout          = 60 * time.Second
-	genericTickTime         = 2 * time.Second
-	snapReadyTimeout        = 90 * time.Second // Longer timeout for snapshot operations
-	attachCheckInterval     = 3 * time.Second
-	attachCheckTimeout      = 15 * time.Second
-	paramHostSC             = "hostStorageClass"
-	paramHostVolMode        = "hostVolumeMode"
-	paramSnapshotType       = "type"
-	snapshotTypeBackup      = "backup"
-	LHBackup                = harvesterv1beta1.VolumeRemoteBackupLH
-	longhornProvisioner     = "driver.longhorn.io"
-	annoFSVolumeForVM       = "harvesterhci.io/volumeForVirtualMachine"
-	labelSnapHostSC         = "harvesterhci.io/snapHostSC"
-	labelSnapHostVolumeMode = "harvesterhci.io/snapHostVolumeMode"
-	labelBackupSrcVol       = "harvesterhci.io/backupSourceVolume"
-	LonghornNS              = "longhorn-system"
-	HarvesterNS             = "harvester-system"
-	VolumeSnapshotKind      = "VolumeSnapshot"
+	genericTimeout              = 60 * time.Second
+	genericTickTime             = 2 * time.Second
+	snapReadyTimeout            = 90 * time.Second // Longer timeout for snapshot operations
+	attachCheckInterval         = 3 * time.Second
+	attachCheckTimeout          = 15 * time.Second
+	paramHostSC                 = "hostStorageClass"
+	paramHostVolMode            = "hostVolumeMode"
+	paramSnapshotType           = "type"
+	snapshotTypeBackup          = "backup"
+	LHBackup                    = harvesterv1beta1.VolumeRemoteBackupLH
+	longhornProvisioner         = "driver.longhorn.io"
+	annoFSVolumeForVM           = "harvesterhci.io/volumeForVirtualMachine"
+	labelSnapHostSC             = "harvesterhci.io/snapHostSC"
+	labelSnapHostVolumeMode     = "harvesterhci.io/snapHostVolumeMode"
+	labelBackupSrcVol           = "harvesterhci.io/backupSourceVolume"
+	LonghornNS                  = "longhorn-system"
+	HarvesterNS                 = "harvester-system"
+	VolumeSnapshotKind          = "VolumeSnapshot"
+	volumeRemoteRestoreResource = "volumeremoterestores"
 )
 
 type ControllerServer struct {
@@ -75,8 +77,9 @@ type ControllerServer struct {
 	virtClient      kubecli.KubevirtClient
 	lhClient        *lhclientset.Clientset
 	harvNetFSClient *harvnetworkfsset.Clientset
-	harvClient      *harvclient.Clientset
+	harvClient      harvclient.Interface
 	snapClient      *snapclient.Clientset
+	hostDiscovery   serverResourcesGetter
 
 	useDeclarativeHotplug bool
 
@@ -94,7 +97,7 @@ func NewControllerServer(
 	lhClient *lhclientset.Clientset,
 	kubeClient *kubernetes.Clientset,
 	harvNetFSClient *harvnetworkfsset.Clientset,
-	harvClient *harvclient.Clientset,
+	harvClient harvclient.Interface,
 	snapClient *snapclient.Clientset,
 	pods ctlv1.PodCache,
 	namespace string,
@@ -126,6 +129,7 @@ func NewControllerServer(
 		harvNetFSClient:       harvNetFSClient,
 		harvClient:            harvClient,
 		snapClient:            snapClient,
+		hostDiscovery:         kubeClient.Discovery(),
 		pods:                  pods,
 		useDeclarativeHotplug: useDeclarativeHotplug,
 		caps: getControllerServiceCapabilities(
@@ -561,26 +565,81 @@ func (cs *ControllerServer) buildHostVolumeRemoteRestore(
 	}, nil
 }
 
-func (cs *ControllerServer) deleteVolumeRemoteRestoreIfExists(ctx context.Context, volumeID string) (bool, error) {
-	pr, err := cs.getHostVolumeRemoteRestore(ctx, cs.namespace, volumeID)
+type serverResourcesGetter interface {
+	ServerResourcesForGroupVersion(groupVersion string) (*metav1.APIResourceList, error)
+}
+
+// volumeRemoteRestoreAPIServed asks the host cluster whether it serves the VolumeRemoteRestore
+// API. confirmed is false when discovery could not answer, in which case the caller must not
+// assume anything about the API.
+func (cs *ControllerServer) volumeRemoteRestoreAPIServed() (served, confirmed bool) {
+	if cs.hostDiscovery == nil {
+		return false, false
+	}
+
+	groupVersion := harvesterv1beta1.SchemeGroupVersion.String()
+	resources, err := cs.hostDiscovery.ServerResourcesForGroupVersion(groupVersion)
 	if errors.IsNotFound(err) {
+		// The host does not serve the group version at all.
+		return false, true
+	}
+	if err != nil {
+		logrus.Warnf("Failed to discover %s on the host cluster: %v", groupVersion, err)
+		return false, false
+	}
+
+	for _, resource := range resources.APIResources {
+		if resource.Name == volumeRemoteRestoreResource {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+func (cs *ControllerServer) deleteVolumeRemoteRestoreIfExists(ctx context.Context, volumeID string) (bool, error) {
+	restore, err := cs.getHostVolumeRemoteRestore(ctx, cs.namespace, volumeID)
+	switch {
+	case errors.IsNotFound(err):
+		// The volume was not provisioned from a backup, there is nothing to clean up.
+		return false, nil
+	case meta.IsNoMatchError(err):
+		// The host has no VolumeRemoteRestore kind, so there is nothing to clean up.
+		// Continue with the PVC deletion instead of blocking it.
+		logrus.Warnf("VolumeRemoteRestore API unavailable for %s: %v, continuing with PVC deletion", volumeID, err)
+		return false, nil
+	case errors.IsForbidden(err):
+		// A host that serves the API answers Forbidden for a stale or incomplete RBAC rule
+		// just as it does for one that predates the API. Only the second is safe to skip:
+		// skipping the first would leave the VolumeRemoteRestore behind, and its controller
+		// would recreate the PVC that DeleteVolume goes on to delete.
+		if served, confirmed := cs.volumeRemoteRestoreAPIServed(); confirmed && !served {
+			logrus.Warnf("VolumeRemoteRestore API unavailable for %s: %v, continuing with PVC deletion", volumeID, err)
+			return false, nil
+		}
+		return false, status.Errorf(codes.Internal, "Not allowed to get VolumeRemoteRestore %s: %v", volumeID, err)
+	case err != nil:
+		return false, status.Errorf(codes.Internal, "Failed to get VolumeRemoteRestore %s: %v", volumeID, err)
+	}
+
+	return cs.deleteRemoteRestore(ctx, restore)
+}
+
+func (cs *ControllerServer) deleteRemoteRestore(ctx context.Context, restore *harvesterv1beta1.VolumeRemoteRestore) (bool, error) {
+	logrus.Infof("Found VolumeRemoteRestore %s/%s, deleting it", restore.Namespace, restore.Name)
+
+	err := cs.deleteHostVolumeRemoteRestore(ctx, restore.Namespace, restore.Name)
+	if errors.IsNotFound(err) {
+		// It was deleted concurrently between the get and the delete. Continue with the PVC
+		// deletion so a PVC that the cascading delete left behind is still removed.
+		logrus.Infof("VolumeRemoteRestore %s/%s is already gone, continuing with PVC deletion", restore.Namespace, restore.Name)
 		return false, nil
 	}
-
 	if err != nil {
-		logrus.Warnf("Failed to get VolumeRemoteRestore %s: %v, continuing with PVC deletion", volumeID, err)
-		return false, err
+		return false, status.Errorf(codes.Internal, "Failed to delete VolumeRemoteRestore %s: %v", restore.Name, err)
 	}
 
-	logrus.Infof("Found VolumeRemoteRestore %s/%s for volume %s, deleting it", pr.Namespace, pr.Name, volumeID)
-	err = cs.deleteHostVolumeRemoteRestore(ctx, cs.namespace, volumeID)
-	if err != nil {
-		return false, err
-	}
-
-	logrus.Infof("Successfully deleted VolumeRemoteRestore %s/%s", cs.namespace, volumeID)
+	logrus.Infof("Successfully deleted VolumeRemoteRestore %s/%s", restore.Namespace, restore.Name)
 	return true, nil
-
 }
 
 func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
