@@ -604,11 +604,11 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 
 	resPVC, err := cs.coreClient.PersistentVolumeClaim().Get(cs.namespace, req.GetVolumeId(), metav1.GetOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", req.GetVolumeId(), err)
-	}
 	if errors.IsNotFound(err) {
+		// The volume is already gone. DeleteVolume is required to be idempotent.
 		return &csi.DeleteVolumeResponse{}, nil
+	} else if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get PVC %s: %v", req.GetVolumeId(), err)
 	}
 
 	// TODO: we need generalize the RWX volume on next release
