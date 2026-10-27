@@ -12,6 +12,9 @@ fi
 LINKFLAGS="-X github.com/harvester/harvester-csi-driver/pkg/version.Version=$VERSION"
 LINKFLAGS="-X github.com/harvester/harvester-csi-driver/pkg/version.GitCommit=$COMMIT $LINKFLAGS"
 
+echo "Current go builder info:"
+go version
+
 for arch in "amd64" "arm64"; do
     GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "$LINKFLAGS $OTHER_LINKFLAGS" -o bin/harvester-csi-driver-"$arch"
 done

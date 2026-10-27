@@ -19,7 +19,7 @@ endif
 
 BANNER = @printf "$(BOLD)$(CYAN)[target: $@]$(RESET)\n"
 
-DOCKER_BUILD := docker build \
+DOCKER_BUILD := docker build --pull \
 	--progress=$(MK_DOCKER_PROGRESS) \
 	--build-arg MK_REPO_ID=$(MK_REPO_ID) \
 	--build-arg MK_HOST_ARCH=$(MK_HOST_ARCH) \
