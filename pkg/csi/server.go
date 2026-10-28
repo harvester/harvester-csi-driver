@@ -20,11 +20,13 @@ package csi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
@@ -42,10 +44,11 @@ type NonBlockingGRPCServer struct {
 }
 
 func (s *NonBlockingGRPCServer) Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
+	listener := s.listen(endpoint, ids, cs, ns)
 
 	s.wg.Add(1)
 
-	go s.serve(endpoint, ids, cs, ns)
+	go s.serve(listener)
 
 }
 
@@ -61,7 +64,30 @@ func (s *NonBlockingGRPCServer) ForceStop() {
 	s.server.Stop()
 }
 
-func (s *NonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
+// StopOnDone blocks until ctx is done, then stops the server gracefully,
+// falling back to a forced stop if in-flight RPCs have not finished within
+// timeout.
+func (s *NonBlockingGRPCServer) StopOnDone(ctx context.Context, timeout time.Duration) {
+	<-ctx.Done()
+	logrus.Info("Stopping GRPC server")
+
+	stopped := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(timeout):
+		logrus.Warnf("GRPC server did not stop within %s, forcing stop", timeout)
+		s.ForceStop()
+	}
+}
+
+// listen creates the listener and the server before Start returns, so that
+// Stop and ForceStop never see a nil server.
+func (s *NonBlockingGRPCServer) listen(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) net.Listener {
 
 	proto, addr, err := parseEndpoint(endpoint)
 	if err != nil {
@@ -96,9 +122,15 @@ func (s *NonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 		csi.RegisterNodeServer(server, ns)
 	}
 
+	return listener
+}
+
+func (s *NonBlockingGRPCServer) serve(listener net.Listener) {
+	defer s.wg.Done()
+
 	logrus.Infof("Listening for connections on address: %#v", listener.Addr())
 
-	if err := server.Serve(listener); err != nil {
+	if err := s.server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		logrus.Fatalf("Failed to serve: %v", err)
 	}
 }
