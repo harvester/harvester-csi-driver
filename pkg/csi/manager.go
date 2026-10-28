@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"time"
 
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	"github.com/harvester/harvester/pkg/settings"
@@ -41,6 +42,9 @@ const (
 	csiDriverConfig           = "csi-driver-config"
 	serverVersionSettingName  = settings.ServerVersionSettingName
 	threadiness               = 2 // Number of threads to use for the CSI driver
+	// Kept under the plugin pod's 30s terminationGracePeriodSeconds so a
+	// forced stop still exits before the kubelet sends SIGKILL.
+	grpcStopTimeout = 10 * time.Second
 )
 
 var errVMINotFound = errors.New("not found")
@@ -222,6 +226,7 @@ func (m *Manager) Run(cfg *config.Config) error {
 	// Create GRPC servers
 	s := NewNonBlockingGRPCServer()
 	s.Start(cfg.Endpoint, m.ids, m.cs, m.ns)
+	go s.StopOnDone(ctx, grpcStopTimeout)
 	// only run event controller on CP nodes
 	if localKubeClient != nil {
 		node, err := localKubeClient.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
