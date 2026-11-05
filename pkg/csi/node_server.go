@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/volume/util/hostutil"
 	"k8s.io/mount-utils"
 	"k8s.io/utils/exec"
@@ -68,7 +69,7 @@ func NewNodeServer(
 	}
 }
 
-func (ns *NodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	volCaps := req.GetVolumeCapability()
 	if volCaps == nil {
 		return nil, status.Error(codes.InvalidArgument, "Missing volume capability in request")
@@ -76,12 +77,62 @@ func (ns *NodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 
 	volAccessMode := volCaps.GetAccessMode().GetMode()
 	if volAccessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
-		return ns.nodeStageRWXVolume(req)
+		return ns.nodeStageRWXVolume(ctx, req)
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
-func (ns *NodeServer) nodeStageRWXVolume(req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+// networkFSForVolume resolves the NetworkFilesystem behind a guest CSI volume ID,
+// returning it with the Longhorn volume name.
+func (ns *NodeServer) networkFSForVolume(ctx context.Context, volName string) (*networkfsv1.NetworkFilesystem, string, error) {
+	pvc, err := ns.coreClient.PersistentVolumeClaim().Get(ns.namespace, volName, metav1.GetOptions{})
+	if err != nil {
+		return nil, "", status.Errorf(codes.Internal, "Failed to get PVC %v: %v", volName, err)
+	}
+	lhVolName := pvc.Spec.VolumeName
+	if lhVolName == "" {
+		return nil, "", status.Errorf(codes.Internal, "PVC %v is not bound to a volume yet", volName)
+	}
+	networkfs, err := ns.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(ctx, lhVolName, metav1.GetOptions{})
+	if err != nil {
+		return nil, lhVolName, status.Errorf(codes.Internal, "Failed to get NetworkFS %v: %v", lhVolName, err)
+	}
+	return networkfs, lhVolName, nil
+}
+
+// ensureNetworkFSEnabled returns the NetworkFilesystem once it is ready to mount,
+// re-asserting desiredState=Enabled first: only publishRWXVolume writes Enabled, and
+// the attacher never re-issues ControllerPublishVolume for an attached VolumeAttachment.
+func (ns *NodeServer) ensureNetworkFSEnabled(ctx context.Context, volName string) (*networkfsv1.NetworkFilesystem, string, error) {
+	networkfs, lhVolName, err := ns.networkFSForVolume(ctx, volName)
+	if err != nil {
+		return nil, lhVolName, err
+	}
+
+	// Checked before the status: networkfs-manager writes the status only after it has
+	// stopped the share, so a freshly disabled export keeps reporting Ready for a while.
+	if networkfs.Spec.DesiredState != networkfsv1.NetworkFSStateEnabled {
+		patch := []byte(`{"spec":{"desiredState":"Enabled"}}`)
+		if _, err := ns.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Patch(
+			ctx, lhVolName, types.MergePatchType, patch, metav1.PatchOptions{},
+		); err != nil {
+			return nil, lhVolName, status.Errorf(codes.Internal, "Failed to re-enable NetworkFS %v: %v", lhVolName, err)
+		}
+		logrus.Warnf("NetworkFS %v had desiredState %v while node %v requested it, asked networkfs-manager to re-enable it",
+			lhVolName, networkfs.Spec.DesiredState, ns.nodeID)
+		return nil, lhVolName, status.Errorf(codes.Internal, "NetworkFS %v is not ready", lhVolName)
+	}
+
+	if networkfs.Status.Status == networkfsv1.EndpointStatusReady && networkfs.Status.Endpoint != "" {
+		return networkfs, lhVolName, nil
+	}
+
+	logrus.Infof("NetworkFS %v is enabled but not ready for node %v yet (state %v, status %v, endpoint %q), waiting for networkfs-manager",
+		lhVolName, ns.nodeID, networkfs.Status.State, networkfs.Status.Status, networkfs.Status.Endpoint)
+	return nil, lhVolName, status.Errorf(codes.Internal, "NetworkFS %v is not ready", lhVolName)
+}
+
+func (ns *NodeServer) nodeStageRWXVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	logrus.Infof("NodeStageVolume is called with req %+v", req)
 
 	stagingTargetPath := req.GetStagingTargetPath()
@@ -94,18 +145,9 @@ func (ns *NodeServer) nodeStageRWXVolume(req *csi.NodeStageVolumeRequest) (*csi.
 		return nil, status.Error(codes.InvalidArgument, "volume capability missing in request")
 	}
 
-	volName := req.GetVolumeId()
-	pvc, err := ns.coreClient.PersistentVolumeClaim().Get(ns.namespace, volName, metav1.GetOptions{})
+	networkfs, lhVolName, err := ns.ensureNetworkFSEnabled(ctx, req.GetVolumeId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to get PVC %v: %v", volName, err)
-	}
-	lhVolName := pvc.Spec.VolumeName
-	networkfs, err := ns.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), lhVolName, metav1.GetOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFS %v: %v", lhVolName, err)
-	}
-	if networkfs.Status.Status != networkfsv1.EndpointStatusReady {
-		return nil, status.Errorf(codes.Internal, "NetworkFS %v is not ready", lhVolName)
+		return nil, err
 	}
 	// basically, we are using NFSv4, update the args
 	mountOpts := "vers=4"
@@ -170,7 +212,7 @@ func (ns *NodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageV
 }
 
 // NodePublishVolume will mount the volume /dev/<hot_plug_device> to target_path
-func (ns *NodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	logrus.Infof("NodeServer NodePublishVolume req: %v", req)
 
 	targetPath := req.GetTargetPath()
@@ -185,14 +227,14 @@ func (ns *NodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 
 	volAccessMode := volumeCapability.GetAccessMode().GetMode()
 	if volAccessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
-		return ns.nodePublishRWXVolume(req, targetPath, volumeCapability)
+		return ns.nodePublishRWXVolume(ctx, req, targetPath, volumeCapability)
 	} else if volAccessMode == csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
 		return ns.nodePublishRWOVolume(req, targetPath, volumeCapability)
 	}
 	return nil, status.Error(codes.InvalidArgument, "Invalid Access Mode, neither RWX nor RWO")
 }
 
-func (ns *NodeServer) nodePublishRWXVolume(req *csi.NodePublishVolumeRequest, targetPath string, _ *csi.VolumeCapability) (*csi.NodePublishVolumeResponse, error) {
+func (ns *NodeServer) nodePublishRWXVolume(ctx context.Context, req *csi.NodePublishVolumeRequest, targetPath string, _ *csi.VolumeCapability) (*csi.NodePublishVolumeResponse, error) {
 	stagingTargetPath := req.GetStagingTargetPath()
 	if stagingTargetPath == "" {
 		return nil, status.Error(codes.InvalidArgument, "staging target path missing in request")
@@ -210,6 +252,12 @@ func (ns *NodeServer) nodePublishRWXVolume(req *csi.NodePublishVolumeRequest, ta
 	// Already mounted, do nothing
 	if mounted {
 		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
+	// No ControllerPublishVolume is issued while this node keeps the volume attached,
+	// and the kubelet skips NodeStageVolume while the staging path looks mounted.
+	if _, _, err := ns.ensureNetworkFSEnabled(ctx, req.GetVolumeId()); err != nil {
+		return nil, err
 	}
 
 	logrus.Debugf("stagingTargetPath: %s, targetPath: %s", stagingTargetPath, targetPath)
