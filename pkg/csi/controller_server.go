@@ -10,7 +10,6 @@ import (
 	harvesterv1beta1 "github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
 	harvclient "github.com/harvester/harvester/pkg/generated/clientset/versioned"
 	"github.com/harvester/harvester/pkg/settings"
-	"github.com/harvester/harvester/pkg/util"
 	networkfsv1 "github.com/harvester/networkfs-manager/pkg/apis/harvesterhci.io/v1beta1"
 	harvnetworkfsset "github.com/harvester/networkfs-manager/pkg/generated/clientset/versioned"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
@@ -839,6 +838,25 @@ func (cs *ControllerServer) checkGuestVA(pvc *corev1.PersistentVolumeClaim, node
 	return true, nil
 }
 
+// getOtherAttachedGuestNodes returns the guest nodes other than nodeID that still have the guest PV attached.
+func (cs *ControllerServer) getOtherAttachedGuestNodes(guestVolumeID, nodeID string) ([]string, error) {
+	guestVAs, err := cs.localKubeClient.StorageV1().VolumeAttachments().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to list guest VolumeAttachments: %v", err)
+	}
+	nodes := []string{}
+	for _, va := range guestVAs.Items {
+		if va.Spec.Source.PersistentVolumeName == nil || *va.Spec.Source.PersistentVolumeName != guestVolumeID {
+			continue
+		}
+		if va.Spec.NodeName == nodeID || va.DeletionTimestamp != nil || !va.Status.Attached {
+			continue
+		}
+		nodes = append(nodes, va.Spec.NodeName)
+	}
+	return nodes, nil
+}
+
 // ControllerUnpublishVolume will detach the volume
 func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	logrus.Infof("ControllerServer ControllerUnpublishVolume req: %v", req)
@@ -859,7 +877,7 @@ func (cs *ControllerServer) ControllerUnpublishVolume(_ context.Context, req *cs
 
 	// TODO: we need generalize the RWX volume on next release
 	if cs.isLHRWXVolume(pvc) {
-		return cs.unpublishRWXVolume(pvc)
+		return cs.unpublishRWXVolume(pvc, req.GetNodeId())
 	}
 
 	// Check and remove volume from VM or VMI, return error to trigger retry if removal is in progress
@@ -1965,15 +1983,14 @@ func (cs *ControllerServer) publishRWXVolume(pvc *corev1.PersistentVolumeClaim) 
 	return &csi.ControllerPublishVolumeResponse{}, nil
 }
 
-func (cs *ControllerServer) unpublishRWXVolume(pvc *corev1.PersistentVolumeClaim) (*csi.ControllerUnpublishVolumeResponse, error) {
+func (cs *ControllerServer) unpublishRWXVolume(pvc *corev1.PersistentVolumeClaim, nodeID string) (*csi.ControllerUnpublishVolumeResponse, error) {
 	networkfs, err := cs.harvNetFSClient.HarvesterhciV1beta1().NetworkFilesystems(HarvesterNS).Get(context.TODO(), pvc.Spec.VolumeName, metav1.GetOptions{})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
-	}
-
 	if errors.IsNotFound(err) {
 		// do nothing if the networkfilesystem is already deleted
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to get NetworkFileSystem %s: %v", pvc.Spec.VolumeName, err)
 	}
 	if networkfs.Spec.DesiredState == networkfsv1.NetworkFSStateDisabled || networkfs.Status.State == networkfsv1.NetworkFSStateDisabling {
 		// do nothing if the networkfilesystem is already disabled
@@ -1987,16 +2004,38 @@ func (cs *ControllerServer) unpublishRWXVolume(pvc *corev1.PersistentVolumeClaim
 	localPVCNS := localPV.Spec.ClaimRef.Namespace
 	localPVCName := localPV.Spec.ClaimRef.Name
 
-	// if other pods are still using this network filesystem, we cannot disable it
-	index := fmt.Sprintf("%s-%s", localPVCNS, localPVCName)
-	logrus.Debugf("trying to get pods by index %s", index)
-	if pods, err := cs.pods.GetByIndex(util.IndexPodByPVC, index); err == nil && len(pods) > 0 {
-		// do nothing if there are still pods using this network filesystem
-		podList := []string{}
-		for _, pod := range pods {
-			indexedPod := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
-			podList = append(podList, indexedPod)
+	// if other guest nodes still have this volume attached, we cannot disable it
+	attachedNodes, err := cs.getOtherAttachedGuestNodes(pvc.Name, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if len(attachedNodes) > 0 {
+		logrus.Warnf("Cannot disable NetworkFileSystem %s, it is still attached to guest nodes: %v", pvc.Spec.VolumeName, attachedNodes)
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	// if other pods are still using this network filesystem, we cannot disable it.
+	// Query the API server directly: the local pod cache is only started on the
+	// driver pod holding the node-monitor lease, which is not necessarily the one
+	// serving the external-attacher leader.
+	pods, err := cs.localKubeClient.CoreV1().Pods(localPVCNS).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to list pods in namespace %s: %v", localPVCNS, err)
+	}
+	podList := []string{}
+	for _, pod := range pods.Items {
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
 		}
+		for _, vol := range pod.Spec.Volumes {
+			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == localPVCName {
+				podList = append(podList, fmt.Sprintf("%s/%s", pod.Namespace, pod.Name))
+				break
+			}
+		}
+	}
+	if len(podList) > 0 {
+		// do nothing if there are still pods using this network filesystem
 		logrus.Warnf("Cannot disable NetworkFileSystem %s, there are still pods using it: %v", pvc.Spec.VolumeName, podList)
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
