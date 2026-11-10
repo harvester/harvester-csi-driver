@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
@@ -79,7 +80,7 @@ type ControllerServer struct {
 	harvNetFSClient *harvnetworkfsset.Clientset
 	harvClient      harvclient.Interface
 	snapClient      *snapclient.Clientset
-	hostDiscovery   serverResourcesGetter
+	hostDiscovery   discovery.ServerResourcesInterface
 
 	useDeclarativeHotplug bool
 
@@ -563,10 +564,6 @@ func (cs *ControllerServer) buildHostVolumeRemoteRestore(
 			ContentSource: req.GetVolumeContentSource(),
 		},
 	}, nil
-}
-
-type serverResourcesGetter interface {
-	ServerResourcesForGroupVersion(groupVersion string) (*metav1.APIResourceList, error)
 }
 
 // volumeRemoteRestoreAPIServed asks the host cluster whether it serves the VolumeRemoteRestore
